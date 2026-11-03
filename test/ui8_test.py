@@ -1,5 +1,6 @@
 from playwright.sync_api import sync_playwright
-path='file:///home/claude/yugotaria/dist/Yugotaria-Civil-War-stage4c.html'
+from ui_common import GAME, OUT, out
+path=GAME
 errs=[]
 with sync_playwright() as p:
     b=p.chromium.launch(); pg=b.new_page(viewport={'width':1440,'height':900})
@@ -11,9 +12,9 @@ with sync_playwright() as p:
     pg.select_option('[data-formsel]','hmg_team'); pg.wait_for_timeout(150)
     pg.click('[data-act=form]'); pg.wait_for_timeout(200)
     print('queue', pg.evaluate('()=>window.__state.formations.length'))
-    pg.screenshot(path='/tmp/claude-0/b1_form.png', full_page=False)
+    pg.screenshot(path=out('b1_form.png'), full_page=False)
     pg.click('#btnEco'); pg.wait_for_timeout(200); pg.select_option('#bmItem','НСВ «Утьос»'); pg.click('#bmBuy'); pg.wait_for_timeout(200)
-    pg.screenshot(path='/tmp/claude-0/b2_market.png')
+    pg.screenshot(path=out('b2_market.png'))
     print('orders', pg.evaluate('()=>window.__state.market.length'))
     b.close()
 print('ERRORS', errs)

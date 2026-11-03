@@ -1,5 +1,6 @@
 from playwright.sync_api import sync_playwright
-path='file:///home/claude/yugotaria/dist/Yugotaria-Civil-War-stage4c.html'
+from ui_common import GAME, OUT, out
+path=GAME
 errs=[]
 with sync_playwright() as p:
     b=p.chromium.launch(); pg=b.new_page(viewport={'width':1440,'height':900})
@@ -17,9 +18,9 @@ with sync_playwright() as p:
     print(info)
     pg.click(f'[data-unit="{info["u"]}"]'); pg.wait_for_timeout(300)
     for _ in range(2): pg.click('#zoomIn')
-    pg.screenshot(path='/tmp/claude-0/l1.png')
+    pg.screenshot(path=out('l1.png'))
     pg.click('.subsec [data-act=loot]'); pg.wait_for_timeout(300)
-    pg.screenshot(path='/tmp/claude-0/l2.png')
+    pg.screenshot(path=out('l2.png'))
     print(pg.evaluate(f'()=>{{const u=Engine.unitById(window.__state,{info["u"]});return [JSON.stringify(u.weapons),JSON.stringify(u.cargo)]}}'))
     b.close()
 print('ERRORS', errs)

@@ -1,5 +1,6 @@
 from playwright.sync_api import sync_playwright
-path='file:///home/claude/yugotaria/dist/Yugotaria-Civil-War-stage4c.html'
+from ui_common import GAME, OUT, out
+path=GAME
 errs=[]
 with sync_playwright() as p:
     b=p.chromium.launch(); pg=b.new_page(viewport={'width':1440,'height':900})
@@ -8,16 +9,16 @@ with sync_playwright() as p:
     pg.goto(path); pg.wait_for_timeout(800); pg.click('#btnBeginPhase'); pg.wait_for_timeout(200)
     ids=pg.evaluate('''()=>{const s=window.__state;const k=s.units.find(u=>u.type==='veh_kamaz'&&u.faction===0);const pl=s.units.find(u=>u.type==='inf_platoon'&&u.faction===0);pl.idx=k.idx;UI.renderAll();return {k:k.id,pl:pl.id}}''')
     pg.click(f'[data-unit="{ids["pl"]}"]'); pg.wait_for_timeout(200)
-    pg.screenshot(path='/tmp/claude-0/u1_board.png')
+    pg.screenshot(path=out('u1_board.png'))
     pg.click(f'[data-act=board][data-vid="{ids["k"]}"]'); pg.wait_for_timeout(200)
     print('embarked', pg.evaluate(f'()=>Engine.unitById(window.__state,{ids["pl"]}).embarked'))
     pg.click(f'[data-unit="{ids["k"]}"]'); pg.wait_for_timeout(200)
     pg.click('[data-act=move]')
     box=pg.locator('#map').bounding_box()
     pg.mouse.click(box['x']+box['width']/2-260, box['y']+box['height']/2+30); pg.wait_for_timeout(200)
-    pg.screenshot(path='/tmp/claude-0/u2_route.png')
+    pg.screenshot(path=out('u2_route.png'))
     pg.click('[data-act=confirm]'); pg.wait_for_timeout(300)
-    pg.screenshot(path='/tmp/claude-0/u3_moved.png')
+    pg.screenshot(path=out('u3_moved.png'))
     print('pos', pg.evaluate(f'()=>{{const s=window.__state;const k=Engine.unitById(s,{ids["k"]}),p=Engine.unitById(s,{ids["pl"]});return [k.idx,p.idx,k.vehicle.fuel]}}'))
     pg.click('[data-act=unloadAll]'); pg.wait_for_timeout(200)
     pg.click(f'[data-unit="{ids["pl"]}"]'); pg.wait_for_timeout(200)
@@ -26,7 +27,7 @@ with sync_playwright() as p:
     for i in range(3): pg.click('#btnEndPhase'); pg.click('#btnBeginPhase')
     pg.click(f'[data-unit="{ids["pl"]}"]'); pg.wait_for_timeout(200)
     pg.click('[data-act=split]'); pg.wait_for_timeout(200)
-    pg.screenshot(path='/tmp/claude-0/u4_split.png')
+    pg.screenshot(path=out('u4_split.png'))
     print('units', pg.evaluate('()=>window.__state.units.filter(u=>u.faction===0).length'))
     b.close()
 print('ERRORS', errs)

@@ -1,0 +1,13 @@
+{
+  "name": "yugotaria-civil-war",
+  "version": "0.4.3",
+  "private": true,
+  "description": "Yugotaria: Civil War — покроковий гексовий варгейм для браузера (один HTML-файл, без залежностей)",
+  "scripts": {
+    "build": "node build.js",
+    "release": "node build.js --release",
+    "test": "node build.js && node test/run.js",
+    "test:ui": "node build.js && python3 test/run_ui.py",
+    "balance": "node test/balance.js"
+  }
+}

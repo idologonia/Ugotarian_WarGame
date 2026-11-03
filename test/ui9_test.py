@@ -1,5 +1,6 @@
 from playwright.sync_api import sync_playwright
-path='file:///home/claude/yugotaria/dist/Yugotaria-Civil-War-stage4c.html'
+from ui_common import GAME, OUT, out
+path=GAME
 errs=[]
 with sync_playwright() as p:
     b=p.chromium.launch(); pg=b.new_page(viewport={'width':1440,'height':900})
@@ -10,7 +11,7 @@ with sync_playwright() as p:
       for(let k=0;k<6;k++){const m=g.neighbor(d.idx,k);if(m>=0&&!Engine.unitsAt(s,m).length&&Engine.hexPassable(s,'foot',m)){n.idx=m;break;}}Intel.update(s);}''')
     pg.click('#btnEndPhase'); pg.click('#btnBeginPhase'); pg.wait_for_timeout(300)
     pg.click('[data-ltab=allies]'); pg.wait_for_timeout(200)
-    pg.screenshot(path='/tmp/claude-0/al1.png')
+    pg.screenshot(path=out('al1.png'))
     print('ally rows', pg.locator('#unitlist .urow').count())
     b.close()
 print('ERRORS', errs)

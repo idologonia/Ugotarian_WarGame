@@ -1,6 +1,7 @@
 import sys, json
 from playwright.sync_api import sync_playwright
-path='file:///home/claude/yugotaria/dist/Yugotaria-Civil-War-stage1.html'
+from ui_common import GAME, OUT, out
+path=GAME
 errs=[]
 with sync_playwright() as p:
     b=p.chromium.launch()
@@ -8,7 +9,7 @@ with sync_playwright() as p:
     pg.on('console', lambda m: errs.append(m.text) if m.type=='error' else None)
     pg.on('pageerror', lambda e: errs.append('PAGEERROR '+str(e)))
     pg.goto(path); pg.wait_for_timeout(1500)
-    pg.screenshot(path='/tmp/claude-0/s1.png')
+    pg.screenshot(path=out('s1.png'))
     # select first unit in list
     pg.click('#unitlist .urow >> nth=0'); pg.wait_for_timeout(200)
     st=pg.evaluate('()=>{const s=window.__state;return {phase:s.phase,units:s.units.length}}')
@@ -34,7 +35,7 @@ with sync_playwright() as p:
     x=box['x']+box['width']/2+(sc['x']-sel['x'])*scale
     y=box['y']+box['height']/2+(sc['y']-sel['y'])*scale
     pg.mouse.click(x,y); pg.wait_for_timeout(200)
-    pg.screenshot(path='/tmp/claude-0/s2.png')
+    pg.screenshot(path=out('s2.png'))
     print('preview panel:', pg.locator('.route').count())
     pg.click('[data-act=confirm]'); pg.wait_for_timeout(200)
     u0=pg.evaluate('()=>{const u=window.__state.units.find(x=>x.faction===0);return {idx:u.idx,mp:u.mp,order:!!u.order}}')
@@ -44,16 +45,16 @@ with sync_playwright() as p:
     print('time',t)
     pg.click('#btnSaves'); pg.wait_for_timeout(200)
     pg.click('[data-save=slot1]'); pg.wait_for_timeout(200)
-    pg.screenshot(path='/tmp/claude-0/s3.png')
+    pg.screenshot(path=out('s3.png'))
     pg.click('[data-load=slot1]'); pg.wait_for_timeout(300)
     print('after load', pg.evaluate('()=>window.__state.time'))
-    pg.click('#btnHelp'); pg.wait_for_timeout(200); pg.screenshot(path='/tmp/claude-0/s4.png'); pg.keyboard.press('Escape')
+    pg.click('#btnHelp'); pg.wait_for_timeout(200); pg.screenshot(path=out('s4.png')); pg.keyboard.press('Escape')
     # mobile
     m=b.new_page(viewport={'width':400,'height':800})
     m.on('pageerror', lambda e: errs.append('M PAGEERROR '+str(e)))
-    m.goto(path); m.wait_for_timeout(1200); m.screenshot(path='/tmp/claude-0/m1.png', full_page=False)
+    m.goto(path); m.wait_for_timeout(1200); m.screenshot(path=out('m1.png'), full_page=False)
     sw=m.evaluate('()=>[document.documentElement.scrollWidth, innerWidth]'); print('mobile width',sw)
     # dark
-    d=b.new_page(viewport={'width':1440,'height':880}, color_scheme='dark'); d.goto(path); d.wait_for_timeout(1200); d.screenshot(path='/tmp/claude-0/d1.png')
+    d=b.new_page(viewport={'width':1440,'height':880}, color_scheme='dark'); d.goto(path); d.wait_for_timeout(1200); d.screenshot(path=out('d1.png'))
     b.close()
 print('ERRORS', errs)

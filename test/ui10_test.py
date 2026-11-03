@@ -1,7 +1,8 @@
 from playwright.sync_api import sync_playwright
-path='file:///home/claude/yugotaria/dist/Yugotaria-Civil-War-stage4c.html'
+from ui_common import GAME, OUT, out
+path=GAME
 errs=[]
-SHOT='/tmp/claude-0/-home-claude/1d300be6-9665-56b4-a303-30e7dc4e01f0/scratchpad/'
+SHOT=OUT+'/'
 with sync_playwright() as p:
     b=p.chromium.launch(); pg=b.new_page(viewport={'width':1440,'height':900})
     pg.on('pageerror', lambda e: errs.append('PAGEERROR '+str(e)))
