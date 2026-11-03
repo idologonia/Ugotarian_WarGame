@@ -62,9 +62,17 @@ const MapGen = {
       const i = grid.idx(c, mouthRow);
       if (map.terrain[i] === T.coast) { mouth = i; break; }
     }
+    // Вартість гекса для русла залежить лише від самого гекса — рахуємо шум один раз,
+    // а не на кожне ребро A* (той самий результат, у кілька разів швидше).
+    const noiseField = (sd, scale) => {
+      const f = new Float64Array(N);
+      for (let i = 0; i < N; i++) f[i] = 1 + fbm(sd, grid.col(i) / scale, grid.row(i) / scale, 2) * 6;
+      return f;
+    };
+    const riverCost = noiseField(seed + 53, 4);
     const riverPath = MapGen.astar(grid, source, mouth, (a, b) => {
       if (map.terrain[b] === T.sea) return Infinity;
-      return 1 + fbm(seed + 53, grid.col(b) / 4, grid.row(b) / 4, 2) * 6;
+      return riverCost[b];
     });
     riverPath.unshift(source);
     for (const i of riverPath) map.river[i] = 1;
@@ -131,9 +139,10 @@ const MapGen = {
     const dstCol2 = Math.max(1, Math.min(w - 2, villCol + Math.floor((rnd() - 0.5) * 4)));
     const source2 = grid.idx(srcCol2, 0);
     const target2 = grid.idx(dstCol2, h - 1);
+    const river2Cost = noiseField(seed + 97, 4);
     const river2Path = MapGen.astar(grid, source2, target2, (a, b) => {
       if (map.terrain[b] === T.sea || map.settlement[b] >= 0) return Infinity;
-      return 1 + fbm(seed + 97, grid.col(b) / 4, grid.row(b) / 4, 2) * 6;
+      return river2Cost[b];
     });
     if (river2Path.length) {
       river2Path.unshift(source2);

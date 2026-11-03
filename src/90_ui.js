@@ -33,7 +33,9 @@ const UI = (() => {
     bindInput();
     bindButtons();
     const mq = window.matchMedia('(prefers-color-scheme: dark)');
-    if (mq.addEventListener) mq.addEventListener('change', () => { FC = [0, 1, 2].map(fcolor); renderAll(); });
+    if (mq.addEventListener) mq.addEventListener('change', () => { FC = [0, 1, 2].map(fcolor); invalidateBase(); renderAll(); });
+    // назви пунктів у статичному шарі мають перемалюватися, коли довантажиться шрифт
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => { invalidateBase(); redraw(); });
     requestAnimationFrame(loop);
   }
 
@@ -120,49 +122,130 @@ const UI = (() => {
     ctx.closePath();
   }
 
+  // Додає контур гекса до поточного шляху (без beginPath) — щоб заливати сотні гексів одним fill().
+  // Контур замикається лінією до першої вершини, а не closePath(): у Chrome closePath на шляху
+  // з тисячами підшляхів працює за квадратичний час.
+  function addHex(x, y, r) {
+    ctx.moveTo(x + r, y);
+    for (let k = 1; k < 6; k++) ctx.lineTo(x + r * HEX_COS[k], y + r * HEX_SIN[k]);
+    ctx.lineTo(x + r, y);
+  }
+  const HEX_COS = [0, 1, 2, 3, 4, 5].map(k => Math.cos(Math.PI / 3 * k));
+  const HEX_SIN = [0, 1, 2, 3, 4, 5].map(k => Math.sin(Math.PI / 3 * k));
+
+  // Статичний шар карти (місцевість, контроль, сітка, річки, дороги, назви, постачання)
+  // малюється в окремий canvas і перевикористовується, доки не зміниться вигляд
+  // (зсув, масштаб, перемикачі) або стан гри (renderAll → invalidateBase).
+  // Наведення миші, превʼю маршруту й виділення малюються поверх готового зображення.
+  let base = null, baseVersion = 0, lastKey = '';
+  const invalidateBase = () => { baseVersion++; };
+  let SX = new Float64Array(0), SY = new Float64Array(0);   // екранні координати центрів видимих гексів
+
   function draw() {
     const g = Engine.grid(state), m = state.map, s = view.s;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--mapbg').trim() || '#cfcbbb';
-    ctx.fillRect(0, 0, cw, ch);
-    if (handover) return;
+    if (handover) {
+      ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--mapbg').trim() || '#cfcbbb';
+      ctx.fillRect(0, 0, cw, ch);
+      return;
+    }
 
     const [wl, wt] = toWorld(0, 0), [wr, wb] = toWorld(cw, ch);
     const c0 = Math.max(0, Math.floor(wl / 1.5) - 1), c1 = Math.min(m.w - 1, Math.ceil(wr / 1.5) + 1);
     const r0 = Math.max(0, Math.floor(wt / SQRT3) - 1), r1 = Math.min(m.h - 1, Math.ceil(wb / SQRT3) + 1);
     const vis = [];
     for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) vis.push(r * m.w + c);
+    const visSet = new Set(vis);
 
-    for (const i of vis) {
-      const cc = g.center(i); const [x, y] = toScreen(cc.x, cc.y);
-      hexPath(x, y, s + 0.5);
-      ctx.fillStyle = CONFIG.terrain[m.terrain[i]].color;
-      ctx.fill();
-      if (s >= 13) drawTerrainMarks(i, x, y, s);
-      if (m.shelter && m.shelter[i] && s >= 9) {
-        ctx.strokeStyle = '#3b2f22'; ctx.lineWidth = Math.max(1.2, s * 0.07);
+    // Поки вигляд змінюється щокадру (перетягування, колесо), кеш не допоможе — малюємо
+    // статичний шар просто на екран. Щойно ключ повторився (вигляд зупинився), один раз
+    // малюємо його в кеш і далі лише копіюємо.
+    const key = [view.cx, view.cy, s, cw, ch, dpr, view.showControl, view.showGrid, view.showSupply, pf(), baseVersion].join('|');
+    if (base && base.key === key) {
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.drawImage(base.canvas, 0, 0);
+    } else if (lastKey !== key) {
+      drawBase(g, m, s, vis);
+    } else {
+      if (!base) { const c = document.createElement('canvas'); base = { canvas: c, ctx: c.getContext('2d'), key: '' }; }
+      if (base.canvas.width !== canvas.width || base.canvas.height !== canvas.height) {
+        base.canvas.width = canvas.width; base.canvas.height = canvas.height;
+      }
+      const main = ctx;
+      ctx = base.ctx;
+      try { drawBase(g, m, s, vis); } finally { ctx = main; }
+      base.key = key;
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.drawImage(base.canvas, 0, 0);
+    }
+    lastKey = key;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.lineCap = 'round'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';   // як лишав статичний шар раніше
+
+    drawFacilities(g, visSet);
+    // ніч
+    if (Engine.isNight(state.time.hour)) { ctx.fillStyle = 'rgba(15,20,40,0.22)'; ctx.fillRect(0, 0, cw, ch); }
+
+    drawZones(g, visSet);
+    if (preview && preview.ok && preview.path) drawPreview(g);
+    drawTargets(g);
+    drawMarkers(g, visSet);
+    drawUnits(g, vis);
+    drawCaches(g, visSet);
+    if (preview && preview.ok && preview.hex != null && !preview.path) drawFireLine(g);
+    if (hoverHex >= 0) { const cc = g.center(hoverHex); const [x, y] = toScreen(cc.x, cc.y); hexPath(x, y, s - 1); ctx.strokeStyle = 'rgba(20,20,15,0.6)'; ctx.lineWidth = 1.5; ctx.stroke(); }
+    if (selectedHex >= 0) { const cc = g.center(selectedHex); const [x, y] = toScreen(cc.x, cc.y); hexPath(x, y, s - 1.5); ctx.strokeStyle = '#111'; ctx.lineWidth = 2.5; ctx.stroke(); }
+  }
+
+  function drawBase(g, m, s, vis) {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--mapbg').trim() || '#cfcbbb';
+    ctx.fillRect(0, 0, cw, ch);
+
+    if (SX.length !== g.size) { SX = new Float64Array(g.size); SY = new Float64Array(g.size); }
+    for (const i of vis) { const cc = g.center(i); const [x, y] = toScreen(cc.x, cc.y); SX[i] = x; SY[i] = y; }
+
+    // місцевість — один fill() на тип замість одного на гекс
+    const byTerrain = CONFIG.terrain.map(() => []);
+    for (const i of vis) byTerrain[m.terrain[i]].push(i);
+    byTerrain.forEach((list, t) => {
+      if (!list.length) return;
+      ctx.beginPath();
+      for (const i of list) addHex(SX[i], SY[i], s + 0.5);
+      ctx.fillStyle = CONFIG.terrain[t].color; ctx.fill();
+    });
+    if (s >= 13) for (const i of vis) drawTerrainMarks(i, SX[i], SY[i], s);
+    if (m.shelter && s >= 9) {
+      ctx.strokeStyle = '#3b2f22'; ctx.lineWidth = Math.max(1.2, s * 0.07);
+      for (const i of vis) {
+        if (!m.shelter[i]) continue;
+        const x = SX[i], y = SY[i];
         for (let k = 0; k < m.shelter[i]; k++) { ctx.beginPath(); ctx.moveTo(x - s * 0.55, y + s * (0.55 - k * 0.14)); for (let z = 0; z < 6; z++) ctx.lineTo(x - s * 0.55 + (z + 1) * s * 0.18, y + s * (0.55 - k * 0.14) + (z % 2 ? 0 : -s * 0.1)); ctx.stroke(); }
       }
     }
     if (view.showControl) {
       ctx.globalAlpha = 0.15;
-      for (const i of vis) {
-        const c = m.control[i]; if (c < 0) continue;
-        const cc = g.center(i); const [x, y] = toScreen(cc.x, cc.y);
-        hexPath(x, y, s); ctx.fillStyle = MAPFC[c]; ctx.fill();
+      for (let f = 0; f < MAPFC.length; f++) {
+        ctx.beginPath();
+        let any = false;
+        for (const i of vis) if (m.control[i] === f) { addHex(SX[i], SY[i], s); any = true; }
+        if (any) { ctx.fillStyle = MAPFC[f]; ctx.fill(); }
       }
       ctx.globalAlpha = 1;
     }
     if (view.showGrid && s >= 9) {
+      // уся сітка — один шлях і одна обводка замість окремої на кожен гекс
       ctx.strokeStyle = 'rgba(40,40,30,0.16)'; ctx.lineWidth = 1;
-      for (const i of vis) { const cc = g.center(i); const [x, y] = toScreen(cc.x, cc.y); hexPath(x, y, s); ctx.stroke(); }
+      ctx.beginPath();
+      for (const i of vis) addHex(SX[i], SY[i], s);
+      ctx.stroke();
     }
     if (view.showControl) {
       ctx.lineWidth = Math.max(1.5, s * 0.1); ctx.strokeStyle = 'rgba(35,30,25,0.75)'; ctx.setLineDash([s * 0.3, s * 0.18]);
       ctx.beginPath();
       for (const i of vis) {
         const a = m.control[i]; if (a < 0) continue;
-        const cc = g.center(i); const [x, y] = toScreen(cc.x, cc.y);
+        const x = SX[i], y = SY[i];
         for (let d = 0; d < 3; d++) {
           const n = g.neighbor(i, d); if (n < 0) continue;
           const b = m.control[n]; if (b < 0 || b === a) continue;
@@ -179,7 +262,7 @@ const UI = (() => {
     ctx.beginPath();
     for (const i of vis) {
       if (!m.river[i]) continue;
-      const cc = g.center(i); const [x, y] = toScreen(cc.x, cc.y);
+      const x = SX[i], y = SY[i];
       let links = 0;
       for (let d = 0; d < 6; d++) {
         const n = g.neighbor(i, d); if (n < 0) continue;
@@ -195,7 +278,7 @@ const UI = (() => {
       ctx.beginPath();
       for (const i of vis) {
         if (m.road[i] < level || !m.roadDirs[i]) continue;
-        const cc = g.center(i); const [x, y] = toScreen(cc.x, cc.y);
+        const x = SX[i], y = SY[i];
         for (let d = 0; d < 6; d++) {
           if (!(m.roadDirs[i] & (1 << d))) continue;
           const n = g.neighbor(i, d);
@@ -212,16 +295,16 @@ const UI = (() => {
         ctx.lineWidth = Math.max(1.2, s * 0.1); ctx.strokeStyle = '#7a5a3a'; ctx.setLineDash([s * 0.25, s * 0.15]); ctx.stroke(); ctx.setLineDash([]);
       }
     }
+    ctx.strokeStyle = '#1d1d1a'; ctx.lineWidth = Math.max(1.5, s * 0.08);
+    ctx.beginPath();
     for (const i of vis) {
       if (!m.bridge[i]) continue;
-      const cc = g.center(i); const [x, y] = toScreen(cc.x, cc.y);
-      ctx.strokeStyle = '#1d1d1a'; ctx.lineWidth = Math.max(1.5, s * 0.08);
+      const x = SX[i], y = SY[i];
       const w = s * 0.42;
-      ctx.beginPath();
       ctx.moveTo(x - w, y - w * 0.55); ctx.lineTo(x + w, y - w * 0.55);
       ctx.moveTo(x - w, y + w * 0.55); ctx.lineTo(x + w, y + w * 0.55);
-      ctx.stroke();
     }
+    ctx.stroke();
     if (s >= 7) {
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       for (const st of m.settlements) {
@@ -236,8 +319,9 @@ const UI = (() => {
     if (s >= 6 && m.borderEntry) {
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       m.borderEntry.forEach((idx, fct) => {
-        if (idx == null || idx < 0 || !vis.includes(idx)) return;
+        if (idx == null || idx < 0) return;
         const cc = g.center(idx); const [x, y] = toScreen(cc.x, cc.y);
+        if (x < -40 || x > cw + 40 || y < -40 || y > ch + 40) return;
         const r = Math.max(6, s * 0.5);
         ctx.beginPath(); ctx.moveTo(x, y - r); ctx.lineTo(x + r, y + r * 0.6); ctx.lineTo(x - r, y + r * 0.6); ctx.closePath();
         ctx.fillStyle = m.control[idx] === fct ? MAPFC[fct] : 'rgba(120,30,30,0.9)'; ctx.fill();
@@ -248,11 +332,13 @@ const UI = (() => {
     if (view.showSupply) {
       const net = Logistics.network(state, pf());
       ctx.fillStyle = 'rgba(70,110,40,0.26)';
-      for (const i of vis) if (net.dist[i] >= 0) { const cc = g.center(i); const [x, y] = toScreen(cc.x, cc.y); hexPath(x, y, s); ctx.fill(); }
+      ctx.beginPath();
+      for (const i of vis) if (net.dist[i] >= 0) addHex(SX[i], SY[i], s);
+      ctx.fill();
       ctx.strokeStyle = '#3f6a1f'; ctx.lineWidth = Math.max(2, s * 0.12); ctx.setLineDash([s * 0.2, s * 0.12]); ctx.beginPath();
       for (const i of vis) {
         if (net.dist[i] < 0) continue;
-        const cc = g.center(i); const [x, y] = toScreen(cc.x, cc.y);
+        const x = SX[i], y = SY[i];
         for (let d = 0; d < 6; d++) {
           const n = g.neighbor(i, d);
           if (n >= 0 && net.dist[n] >= 0) continue;
@@ -263,19 +349,6 @@ const UI = (() => {
       }
       ctx.stroke(); ctx.setLineDash([]);
     }
-    drawFacilities(g, new Set(vis));
-    // ніч
-    if (Engine.isNight(state.time.hour)) { ctx.fillStyle = 'rgba(15,20,40,0.22)'; ctx.fillRect(0, 0, cw, ch); }
-
-    drawZones(g, new Set(vis));
-    if (preview && preview.ok && preview.path) drawPreview(g);
-    drawTargets(g);
-    drawMarkers(g, new Set(vis));
-    drawUnits(g, vis);
-    drawCaches(g, new Set(vis));
-    if (preview && preview.ok && preview.hex != null && !preview.path) drawFireLine(g);
-    if (hoverHex >= 0) { const cc = g.center(hoverHex); const [x, y] = toScreen(cc.x, cc.y); hexPath(x, y, s - 1); ctx.strokeStyle = 'rgba(20,20,15,0.6)'; ctx.lineWidth = 1.5; ctx.stroke(); }
-    if (selectedHex >= 0) { const cc = g.center(selectedHex); const [x, y] = toScreen(cc.x, cc.y); hexPath(x, y, s - 1.5); ctx.strokeStyle = '#111'; ctx.lineWidth = 2.5; ctx.stroke(); }
   }
 
   function drawTerrainMarks(i, x, y, s) {
@@ -629,6 +702,7 @@ const UI = (() => {
   function renderAll() {
     if (!state) return;
     zoneCache = null;
+    invalidateBase();
     if (!handover) Logistics.refreshSupply(state, pf());
     renderHandover(); renderTop(); renderLeft(); renderRight(); renderLog(); renderHexInfo(); renderHint(); redraw();
     window.__state = state;
