@@ -287,8 +287,21 @@ const AI = (() => {
   }
 
   // ------------------------------------------------------------ економіка (важкий)
+  // Експорт у РФ (соц. влада): продаємо надлишок пального й нафти, лишаючи запас для армії
+  function exportSurplus(ctx) {
+    const { state, f } = ctx;
+    if (f !== 0 || Foreign.saleCooldownLeft(state, f) > 0) return;
+    const RT = CONFIG.russiaTrade;
+    for (const [key, keep] of [['fuel', 3000], ['crude', 2000]]) {
+      const n = RT.items[key].n;
+      const batches = Math.min(5, Math.floor((Foreign.saleAvailable(state, f, key) - keep) / n));
+      if (batches >= 1 && !Foreign.saleReason(state, f, key, batches) && ok(Foreign.sellRF(state, f, key, batches))) { ctx.stats.other++; return; }
+    }
+  }
+
   function economy(ctx) {
     const { state, f, g } = ctx;
+    safe(ctx, 'експорт', () => exportSurplus(ctx));
     const eco = Logistics.ensureEconomy(state)[f];
     const stores = Logistics.facilities(state).filter(x => Logistics.isStore(x) && x.owner === f && !x.destroyed);
     if (!stores.length) return;

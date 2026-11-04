@@ -639,6 +639,23 @@ const CONFIG = {
     }
   },
 
+  // Продаж у РФ (запит гравця: «у соц. влади немає торгівлі з РФ»). Соц. влада вивозить через
+  // свій прикордонний перехід «Росія» нафту, пальне й продукцію заводів. Товар береться з її
+  // об’єктів (склади, НПЗ, нафтовий термінал), пов’язаних своєю територією з переходом; гроші
+  // надходять, коли партія перетне кордон (deliveryHours). Втратили перехід раніше — партія
+  // пропала. Ціна залежить від стосунків із патроном (×priceAt0 … ×priceAt100). ЗАГЛУШКИ цін.
+  russiaTrade: {
+    deliveryHours: 3, cooldownHours: 2, maxBatches: 20,
+    priceAt0: 0.7, priceAt100: 1.1, geoPerSale: 1,
+    items: {
+      crude: { kind: 'goods', n: 1000, price: 120 }, fuel: { kind: 'goods', n: 500, price: 220 },
+      '545': { kind: 'ammo', n: 1000, price: 200 }, '762s': { kind: 'ammo', n: 1000, price: 220 }, '762r': { kind: 'ammo', n: 1000, price: 350 },
+      'pg7': { kind: 'ammo', n: 10, price: 450 }, 'm81': { kind: 'ammo', n: 10, price: 400 }, 'g30': { kind: 'ammo', n: 50, price: 280 }, '127': { kind: 'ammo', n: 200, price: 280 },
+      'АК-74': { kind: 'weapons', n: 1, price: 150 }, 'АКМ': { kind: 'weapons', n: 1, price: 160 },
+      'parts': { kind: 'goods', n: 10, price: 160 }
+    }
+  },
+
   // ---------------------------------------- ГЕОПОЛІТИКА, ПВК, ДОБРОВОЛЬЦІ (рішення автора)
   // Два незалежні канали зовнішньої підтримки, обидва йдуть лише через свій прикордонний
   // перехід «з-за кордону» (map.borderEntry — обирається при генерації сценарію; Scenario.
@@ -953,6 +970,12 @@ const CONFIG = {
     fortMax: 3,                // рівні: 1 година в обороні = +1 рівень
     ambushAttacker: 1.25,      // засідка: атакуючий не був виявлений ціллю
     ambushDefender: 0.5,       // ціль, захоплена зненацька, відповідає слабше
+    // Рішення автора (запит гравця «засідка не працює»): ПІДГОТОВЛЕНА засідка (наказ «Засідка»)
+    // — окремо від випадкової атаки невидимим противником. Засідник стріляє шквальним вогнем
+    // з укриття (без штрафу за маневр), бонус до першого вогню вищий, а ціль відповідає ледь-ледь.
+    // Усі свої підрозділи в засідці, що дістають до цілі, стріляють разом (вогневий мішок).
+    ambushPositionAttacker: 1.6,
+    ambushPositionDefender: 0.4,
     // Рішення автора: приводимо гру до стандарту жанру варгеймів — бойовий результат більше
     // не суто детермінований. Кожна сторона в бою отримує окремий «кидок» ефективності вогню
     // в межах ±combatRoll.band (детермінований хеш від seed карти, номера юніта, цілі й години —
@@ -2274,6 +2297,20 @@ const Engine = (() => {
     return out;
   }
 
+  // Гекси маршруту, які підрозділ ще пройде цієї години (за залишком ОР і пального)
+  function pathAheadThisHour(state, u, path) {
+    const g = grid(state), cls = moveClass(u);
+    const out = [];
+    let mp = u.mp, cur = u.idx;
+    for (const next of path) {
+      const dir = g.dirTo(cur, next);
+      const c = dir < 0 ? Infinity : stepCost(state, cls, cur, dir, next);
+      if (!isFinite(c) || c > mp + 1e-9) break;
+      mp -= c; out.push(next); cur = next;
+    }
+    return out;
+  }
+
   function executeMove(state, u) {
     const g = grid(state);
     const o = u.order;
@@ -2329,19 +2366,35 @@ const Engine = (() => {
         break;
       }
       // Засідка: хтось у стансі «Засідка» саме тепер побачив нас і стріляє першим
+      // Вогневий мішок: стріляють УСІ засідники, що дістають до цілі (запит гравця), шквальним
+      // вогнем; якщо на шквальний не вистачає боєприпасів — звичайним. Ціль знищено/розсіяно —
+      // решта не стріляє.
       const ambushers = ambushersAt(state, u);
-      if (ambushers.length) {
-        const w = ambushers[0];
-        Intel.update(state);   // Combat.attack читає кеш видимості — оновлюємо його під нову позицію
-        const r = Combat.attack(state, w.id, { unitId: u.id }, 'normal', { anyPhase: true, forceVisible: true });
-        if (r.ok) {
+      // «Підпустити ближче» (запит гравця): засідка не стріляє, щойно ціль зайшла в дальність,
+      // а чекає, поки та дійде до найближчої до засідника точки маршруту, яку пройде цієї
+      // години. Якщо далі вона лише віддалятиметься (або зупиниться тут) — вогонь.
+      const ahead = pathAheadThisHour(state, u, o.path);
+      const trigger = ambushers.some(w => ahead.every(i => g.dist(i, w.idx) >= g.dist(u.idx, w.idx)));
+      ambushers.sort((a, b) => g.dist(a.idx, u.idx) - g.dist(b.idx, u.idx) || a.id - b.id);
+      if (ambushers.length && trigger) {
+        const fired = [];
+        for (const w of ambushers) {
+          if (!state.units.includes(u) || u.personnel.fit <= 0) break;
+          Intel.update(state);   // Combat.attack читає кеш видимості — оновлюємо його під нову позицію
+          const opts = { anyPhase: true, forceVisible: true, ambushPosition: true };
+          let r = Combat.attack(state, w.id, { unitId: u.id }, 'high', opts);
+          if (!r.ok) r = Combat.attack(state, w.id, { unitId: u.id }, 'normal', opts);
+          if (r.ok) fired.push(w);
+        }
+        if (fired.length) {
+          const names = fired.map(w => w.name).join(', ');
           if (!state.units.includes(u)) {
-            reason = `засідка біля ${g.label(u.idx)}: ${w.name} відкрив вогонь першим.`;
-            return { moved, spent, reason, contact: [w], ambushed: true };
+            reason = `засідка біля ${g.label(u.idx)}: вогонь відкрили ${names}.`;
+            return { moved, spent, reason, contact: fired, ambushed: true };
           }
-          contact = [w];
+          contact = fired;
           o.status = 'contact';
-          reason = `засідка! ${w.name} відкрив вогонь із ${g.label(w.idx)} першим — рух зупинено.`;
+          reason = `засідка! Першими відкрили вогонь ${names} — рух зупинено.`;
           break;
         }
       }
@@ -3566,7 +3619,7 @@ const Combat = (() => {
     const sid = state.map.settlement[tr.hex];
     if (sid >= 0) notes.push(`Ціль у населеному пункті ${state.map.settlements[sid].name}: можливі цивільні втрати й падіння підтримки${indirect ? ' (міни — утричі небезпечніші)' : ''}.`);
     return {
-      ok: true, unitId, target, hex: tr.hex, targetUnit: tr.unit ? tr.unit.id : null, marker: tr.marker || null, area: !!tr.area, areaObserved, zeroing,
+      ok: true, unitId, target, hex: tr.hex, targetUnit: tr.unit ? tr.unit.id : null, marker: tr.marker || null, area: !!tr.area, areaObserved, zeroing, prepared: !!opts.ambushPosition,
       dist, meters, indirect, intensity, freshness, weapons: list.map(x => ({ model: x.model, n: x.n, range: Math.round(x.range) })),
       ammo: fire.use, ammoText: ammoText(fire.use), notes, breaks
     };
@@ -3599,11 +3652,13 @@ const Combat = (() => {
     const step = (title, lines) => R.steps.push({ title, lines });
 
     // 1. Виявлення
-    const ambush = !Intel.isVisible(state, df, a.id);
+    // prepared — вогонь із підготовленої засідки (наказ «Засідка»), сильніший за випадковий
+    const prepared = !!pv.prepared;
+    const ambush = prepared || !Intel.isVisible(state, df, a.id);
     const dIntel = Intel.ensure(state)[af][d.id];
     step('1. Виявлення цілі', [
       `${a.name} (${Engine.fname(af)}) атакує ${dIntel ? dIntel.label : 'противника'} — ${d.name} (${Engine.fname(df)}).`,
-      ambush ? `Засідка: ${d.name} не виявив атакуючого заздалегідь.` : `${d.name} знав про присутність атакуючого.`
+      prepared ? `Підготовлена засідка: ${a.name} чекав у засідці й відкрив вогонь першим.` : ambush ? `Засідка: ${d.name} не виявив атакуючого заздалегідь.` : `${d.name} знав про присутність атакуючого.`
     ]);
     // 2. Дальність і видимість
     step('2. Дальність і лінія видимості', [
@@ -3611,7 +3666,7 @@ const Combat = (() => {
       `Зброя в межах дальності: ${pv.weapons.map(w => `${w.model} ×${w.n} (${w.range} м)`).join(', ')}.`
     ]);
     // 3. Місцевість і чисельність
-    const firingFromPositions = a.stance === 'defend' && a.fort > 0;
+    const firingFromPositions = prepared || (a.stance === 'defend' && a.fort > 0);
     const aCover = coverOf(state, a, { advancing: !firingFromPositions });
     const dCover = coverOf(state, d, {});
     step('3. Місцевість, укриття, чисельність', [
@@ -3639,12 +3694,13 @@ const Combat = (() => {
       resD = hitUnit(state, d, fireA, dCover, extraLines);
       if (fireD) resA = hitUnit(state, aHit, fireD, aHitCover, extraLines);
     } else if (order === 'attacker') {
-      fireA = groupFire(state, a, pv.dist, pv.intensity, { mult: cfg.ambushAttacker, targetArmor: dArmor, roll: rollA });
-      fireLines.push(`Перший вогонь за атакуючим (засідка, вогонь ×${cfg.ambushAttacker}).`);
+      const mA = prepared ? cfg.ambushPositionAttacker : cfg.ambushAttacker, mD = prepared ? cfg.ambushPositionDefender : cfg.ambushDefender;
+      fireA = groupFire(state, a, pv.dist, pv.intensity, { mult: mA, targetArmor: dArmor, roll: rollA });
+      fireLines.push(`Перший вогонь за атакуючим (${prepared ? 'підготовлена засідка' : 'засідка'}, вогонь ×${mA}).`);
       resD = hitUnit(state, d, fireA, dCover, extraLines);
       if (dCanReply && d.personnel.fit > 0) {
-        fireD = groupFire(state, d, pv.dist, dIntensity, { mult: cfg.ambushDefender, targetArmor: aArmor, roll: rollD });
-        fireLines.push(`${d.name} відповідає із запізненням (×${cfg.ambushDefender}).`);
+        fireD = groupFire(state, d, pv.dist, dIntensity, { mult: mD, targetArmor: aArmor, roll: rollD });
+        fireLines.push(`${d.name} відповідає із запізненням (×${mD}).`);
         resA = hitUnit(state, aHit, fireD, aHitCover, extraLines);
       }
     } else {
@@ -6961,11 +7017,11 @@ const Foreign = (() => {
     return last == null ? 0 : Math.max(0, OS_().cooldownHours - (state.time.turn - last));
   }
   function officialChance(state, f) { return relLerp(state, f, OS_().acceptChanceAt0, OS_().acceptChanceAt100); }
+  // Назва товару будь-якого каталогу (закупівлі, продаж): боєприпаси, майно чи зброя
   function officialItemName(key) {
-    const it = OS_().items[key];
-    if (it.kind === 'weapons') return key;
-    if (it.kind === 'ammo') return CONFIG.ammo[key].name;
-    return CONFIG.goods[key].name;
+    if (CONFIG.ammo[key]) return CONFIG.ammo[key].name;
+    if (CONFIG.goods[key]) return CONFIG.goods[key].name;
+    return key;
   }
   function officialOrders(state) { if (!state.officialOrders) state.officialOrders = []; return state.officialOrders; }
   function officialReason(state, f, key, qty, store) {
@@ -7010,6 +7066,81 @@ const Foreign = (() => {
       const bucket = o.kind === 'weapons' ? store.stock.weapons : o.kind === 'ammo' ? store.stock.ammo : store.stock.goods;
       bucket[o.key] = (bucket[o.key] || 0) + o.n;
       Engine.log(state, `На «${store.name}» доставлено офіційну партію — ${officialItemName(o.key)} ×${o.n}.`, 'supply', o.faction);
+    }
+  }
+
+  // ---------------------------------------------------- продаж у РФ (запит гравця)
+  // Соц. влада продає нафту, пальне й продукцію заводів через перехід «Росія». Товар знімається
+  // одразу з її об’єктів, пов’язаних своєю територією з переходом; гроші — коли партія дійде
+  // до кордону. Перехід втрачено/заблоковано до того — партія пропала.
+  const RT_ = () => CONFIG.russiaTrade;
+  function saleOrders(state) { if (!state.rfSales) state.rfSales = []; return state.rfSales; }
+  function saleCooldownLeft(state, f) {
+    const last = (state.rfSaleLast || {})[f];
+    return last == null ? 0 : Math.max(0, RT_().cooldownHours - (state.time.turn - last));
+  }
+  function salePriceMult(state, f) { return relLerp(state, f, RT_().priceAt0, RT_().priceAt100); }
+  function salePrice(state, f, key) { const it = RT_().items[key]; return it ? Math.round(it.price * salePriceMult(state, f)) : 0; }
+  function bucketOf(st, kind) { return kind === 'weapons' ? st.weapons : kind === 'ammo' ? st.ammo : st.goods; }
+  // Об’єкти, з яких можна вивезти товар: свої, цілі, у тій самій частині території, що й перехід
+  function saleSources(state, f) {
+    const idx = entryIdx(state, f);
+    if (idx < 0) return [];
+    const net = Logistics.network(state, f);
+    if (net.comp[idx] < 0) return [];
+    return Logistics.facilities(state).filter(x => x.owner === f && !x.destroyed && x.stock && net.comp[x.idx] === net.comp[idx]);
+  }
+  function saleAvailable(state, f, key) {
+    const it = RT_().items[key];
+    if (!it) return 0;
+    return saleSources(state, f).reduce((a, x) => a + Math.floor(bucketOf(x.stock, it.kind)[key] || 0), 0);
+  }
+  function saleReason(state, f, key, qty) {
+    if (f !== 0) return 'Продаж у РФ доступний лише соц. владі.';
+    const it = RT_().items[key];
+    if (!it) return 'Невідомий товар.';
+    if (!(qty >= 1 && qty <= RT_().maxBatches)) return `Кількість партій — від 1 до ${RT_().maxBatches}.`;
+    const br = borderReason(state, f, null);
+    if (br) return br;
+    if (entryIdx(state, f) < 0) return 'Немає прикордонного переходу.';
+    const left = saleCooldownLeft(state, f);
+    if (left > 0) return `Наступна партія на експорт — через ${left} год.`;
+    const have = saleAvailable(state, f, key);
+    if (have < it.n * qty) return `Бракує товару на об’єктах, пов’язаних із переходом: потрібно ${it.n * qty}, є ${have}.`;
+    return null;
+  }
+  function sellRF(state, f, key, qty) {
+    if (Engine.phaseFaction(state) !== f) return { ok: false, reason: 'Лише у фазі своєї фракції.' };
+    const why = saleReason(state, f, key, qty);
+    if (why) return { ok: false, reason: why };
+    const it = RT_().items[key];
+    let need = it.n * qty;
+    // спершу зі складів, потім із виробництв (НПЗ, термінал, заводи) — ближчих до переходу
+    const g = Engine.grid(state), e = entryIdx(state, f);
+    const srcs = saleSources(state, f).sort((a, b) => (Logistics.isStore(b) ? 1 : 0) - (Logistics.isStore(a) ? 1 : 0) || g.dist(a.idx, e) - g.dist(b.idx, e) || a.id - b.id);
+    for (const x of srcs) {
+      if (need <= 0) break;
+      const b = bucketOf(x.stock, it.kind);
+      const take = Math.min(need, Math.floor(b[key] || 0));
+      if (take > 0) { b[key] -= take; need -= take; }
+    }
+    const price = salePrice(state, f, key) * qty;
+    if (!state.rfSaleLast) state.rfSaleLast = {};
+    state.rfSaleLast[f] = state.time.turn;
+    const o = { id: (state.nextMarketId = (state.nextMarketId || 0) + 1), faction: f, key, qty, n: it.n * qty, kind: it.kind, price, arrive: state.time.turn + RT_().deliveryHours };
+    saleOrders(state).push(o);
+    Engine.log(state, `Експорт у РФ: ${officialItemName(key)} ×${o.n} вирушило до «${entryName(state, f)}». Оплата ${price} грн — коли партія перетне кордон (≈${RT_().deliveryHours} год).`, 'event', f);
+    return { ok: true, price };
+  }
+  function hourSales(state) {
+    for (const o of saleOrders(state).slice()) {
+      if (state.time.turn + 1 < o.arrive) continue;
+      state.rfSales = saleOrders(state).filter(x => x !== o);
+      const br = borderReason(state, o.faction, null);
+      if (br) { Engine.log(state, `Експортна партія «${officialItemName(o.key)}» ×${o.n} пропала: ${br}`, 'warn', o.faction); continue; }
+      Logistics.ensureEconomy(state)[o.faction].money += o.price;
+      Engine.log(state, `Експорт у РФ: партію «${officialItemName(o.key)}» ×${o.n} прийнято, отримано ${o.price} грн.`, 'supply', o.faction);
+      adjustGeo(state, o.faction, RT_().geoPerSale, 'торгівля через кордон');
     }
   }
 
@@ -7178,10 +7309,11 @@ const Foreign = (() => {
       Intel.update(state);
     }
     hourOfficial(state);
+    hourSales(state);
     hourInvestment(state);
   }
 
-  return {
+  return { saleOrders, saleCooldownLeft, salePrice, salePriceMult, saleSources, saleAvailable, saleReason, sellRF,
     geo, patron, adjustGeo, entryIdx, entryName, borderReason,
     pmcItems, pmcPrice, pmcCooldownLeft, pmcReason, hirePmc,
     officialReason, officialRequest, officialCooldownLeft, officialChance, officialOrders, officialItemName,
@@ -10363,6 +10495,56 @@ const UI = (() => {
   }
   function openChronicle() { openPolitics('chron'); }
 
+  // Чорний ринок (повстанці)
+  function blackMarketHtml(f) {
+    return `      <div><h3 style="margin:0 0 6px;font-size:13px">Чорний ринок</h3>
+        <div class="form-row">
+          <label for="bmItem">Товар</label><select id="bmItem">${Object.entries(CONFIG.blackMarket.items).map(([k, it]) => `<option value="${esc(k)}">${esc(Recruit.itemName(k))} — ${it.n} ${esc(Recruit.itemUnit(k))} за ${it.price} грн</option>`).join('')}</select>
+          <label for="bmQty">Партій</label><input type="number" id="bmQty" value="1" min="1" max="20" style="width:70px;padding:4px 6px;background:var(--bg);border:1px solid var(--line)">
+          <label for="bmStore">Доставка</label><select id="bmStore">${Logistics.facilities(state).filter(x => Logistics.isStore(x) && x.owner === f && !x.destroyed).map(x => `<option value="${x.id}">${esc(x.name)}</option>`).join('')}</select>
+          <button type="button" class="primary" id="bmBuy">Замовити</button>
+        </div>
+        <p class="notice">Оплата одразу, доставка через ${CONFIG.blackMarket.deliveryHours} год. Якщо склад доставки втратите — партія пропаде.</p>
+        ${Recruit.orders(state).filter(o => o.faction === f).length ? `<ul class="list">${Recruit.orders(state).filter(o => o.faction === f).map(o => `<li><span>${esc(Recruit.itemName(o.key))} — ${o.n} ${esc(Recruit.itemUnit(o.key))}</span><span>прибуде о ${esc(Engine.timeLabel(Engine.addHours(state.time, o.arrive - state.time.turn)))}</span></li>`).join('')}</ul>` : ''}
+      </div>`;
+  }
+  // Торгівля з РФ (соц. влада): закупівля — офіційні запити (РФ може відмовити); продаж нафти,
+  // пального й продукції заводів через перехід «Росія».
+  function rfTradeHtml(f) {
+    const stores = Logistics.facilities(state).filter(x => Logistics.isStore(x) && x.owner === f && !x.destroyed);
+    const OS = CONFIG.officialSupply, RT = CONFIG.russiaTrade;
+    const fmt = n => Math.round(n).toLocaleString('uk-UA');
+    // порядок у списках: майно (нафта, пальне…) → боєприпаси → зброя
+    const KO = { goods: 0, ammo: 1, weapons: 2 };
+    const sorted = items => Object.entries(items).sort((a, b) => KO[a[1].kind] - KO[b[1].kind]);
+    const unit = k => CONFIG.ammo[k] ? 'шт.' : CONFIG.goods[k] ? CONFIG.goods[k].unit : 'шт.';
+    const offLeft = Foreign.officialCooldownLeft(state, f), saleLeft = Foreign.saleCooldownLeft(state, f);
+    const border = Foreign.borderReason(state, f, null);
+    const orders = Foreign.officialOrders(state).filter(o => o.faction === f);
+    const sales = Foreign.saleOrders(state).filter(o => o.faction === f);
+    const t = state.time.turn;
+    return `<div><h3 style="margin:0 0 6px;font-size:13px">Торгівля з РФ — через ${esc(Foreign.entryName(state, f))}</h3>
+      ${border ? `<p class="notice" style="color:var(--bad)">${esc(border)}</p>` : ''}
+      <h4 style="margin:6px 0 4px;font-size:12.5px">Закупівля (офіційний запит)</h4>
+      <div class="form-row">
+        <label for="rfBuyItem">Товар</label><select id="rfBuyItem">${sorted(OS.items).map(([k, it]) => `<option value="${esc(k)}">${esc(Foreign.officialItemName(k))} — ${it.n} ${esc(unit(k))} за ${it.price} грн</option>`).join('')}</select>
+        <label for="rfBuyQty">Партій</label><input type="number" id="rfBuyQty" value="1" min="1" max="20" style="width:70px;padding:4px 6px;background:var(--bg);border:1px solid var(--line)">
+        <label for="rfBuyStore">Доставка</label><select id="rfBuyStore">${stores.map(x => `<option value="${x.id}">${esc(x.name)}</option>`).join('')}</select>
+        <button type="button" class="primary" id="rfBuy" ${offLeft > 0 ? 'disabled' : ''}>Надіслати запит</button>
+      </div>
+      <p class="notice">РФ схвалює запит із шансом ${Math.round(Foreign.officialChance(state, f))}% (залежить від стосунків). Оплата лише за схвалену партію, доставка за ${OS.deliveryHours} год, запит — раз на ${OS.cooldownHours} год${offLeft > 0 ? ` (наступний через ${offLeft} год)` : ''}.</p>
+      ${orders.length ? `<ul class="list">${orders.map(o => `<li><span>${esc(Foreign.officialItemName(o.key))} ×${o.n}</span><span>прибуде через ${Math.max(0, o.arrive - t)} год</span></li>`).join('')}</ul>` : ''}
+      <h4 style="margin:10px 0 4px;font-size:12.5px">Продаж (експорт)</h4>
+      <div class="form-row">
+        <label for="rfSellItem">Товар</label><select id="rfSellItem">${sorted(RT.items).map(([k, it]) => `<option value="${esc(k)}">${esc(Foreign.officialItemName(k))} — ${it.n} ${esc(unit(k))} за ${Foreign.salePrice(state, f, k)} грн (є ${fmt(Foreign.saleAvailable(state, f, k))})</option>`).join('')}</select>
+        <label for="rfSellQty">Партій</label><input type="number" id="rfSellQty" value="1" min="1" max="${RT.maxBatches}" style="width:70px;padding:4px 6px;background:var(--bg);border:1px solid var(--line)">
+        <button type="button" class="primary" id="rfSell" ${saleLeft > 0 || border ? 'disabled' : ''}>Продати</button>
+      </div>
+      <p class="notice">Товар береться з ваших складів, НПЗ і нафтового термінала, пов’язаних своєю територією з переходом. Гроші — коли партія перетне кордон (≈${RT.deliveryHours} год); якщо перехід втратите раніше — партія пропаде. Ціна ×${Engine.fmt(Foreign.salePriceMult(state, f))} від базової (залежить від стосунків). Партія на експорт — раз на ${RT.cooldownHours} год${saleLeft > 0 ? ` (наступна через ${saleLeft} год)` : ''}.</p>
+      ${sales.length ? `<ul class="list">${sales.map(o => `<li><span>${esc(Foreign.officialItemName(o.key))} ×${o.n} → ${o.price} грн</span><span>на кордоні через ${Math.max(0, o.arrive - t)} год</span></li>`).join('')}</ul>` : ''}
+    </div>`;
+  }
+
   function openEconomy() {
     if (handover) return;
     const f = pf();
@@ -10397,16 +10579,7 @@ const UI = (() => {
         ${lossRows}
       </tbody></table></div>
       <p class="notice">У полоні тримаємо: ${fmt(prisHeld)} чол. Наших у полоні: ${fmt(prisLost)} чол.${uncollected > 0 ? ` Непоховані тіла своїх у полі (тиснуть на мораль, поки не забрані): ${fmt(uncollected)}.` : ''}</p></div>
-      <div><h3 style="margin:0 0 6px;font-size:13px">Чорний ринок</h3>
-        <div class="form-row">
-          <label for="bmItem">Товар</label><select id="bmItem">${Object.entries(CONFIG.blackMarket.items).map(([k, it]) => `<option value="${esc(k)}">${esc(Recruit.itemName(k))} — ${it.n} ${esc(Recruit.itemUnit(k))} за ${it.price} грн</option>`).join('')}</select>
-          <label for="bmQty">Партій</label><input type="number" id="bmQty" value="1" min="1" max="20" style="width:70px;padding:4px 6px;background:var(--bg);border:1px solid var(--line)">
-          <label for="bmStore">Доставка</label><select id="bmStore">${Logistics.facilities(state).filter(x => Logistics.isStore(x) && x.owner === f && !x.destroyed).map(x => `<option value="${x.id}">${esc(x.name)}</option>`).join('')}</select>
-          <button type="button" class="primary" id="bmBuy">Замовити</button>
-        </div>
-        <p class="notice">Оплата одразу, доставка через ${CONFIG.blackMarket.deliveryHours} год. Якщо склад доставки втратите — партія пропаде.</p>
-        ${Recruit.orders(state).filter(o => o.faction === f).length ? `<ul class="list">${Recruit.orders(state).filter(o => o.faction === f).map(o => `<li><span>${esc(Recruit.itemName(o.key))} — ${o.n} ${esc(Recruit.itemUnit(o.key))}</span><span>прибуде о ${esc(Engine.timeLabel(Engine.addHours(state.time, o.arrive - state.time.turn)))}</span></li>`).join('')}</ul>` : ''}
-      </div>
+      ${f === 0 ? rfTradeHtml(f) : blackMarketHtml(f)}
       <div><h3 style="margin:0 0 6px;font-size:13px">Геополітика</h3>
         <p class="notice">Прикордонний перехід: <b>${esc(Foreign.entryName(state, f))}</b> (${esc(Engine.grid(state).label(Foreign.entryIdx(state, f)))})${(() => { const br = Foreign.borderReason(state, f, null); return br ? ` — <span style="color:#b3261e">${esc(br)}</span>` : ' — відкритий.'; })()} Стосунки з патроном: <b>${Math.round(Foreign.geo(state, f))}%</b> (впливають на ціну й кулдаун нижче).</p>
       </div>
@@ -10434,6 +10607,16 @@ const UI = (() => {
         ${Foreign.queue(state).filter(o => o.faction === f && o.kind === 'volunteers').length ? `<ul class="list">${Foreign.queue(state).filter(o => o.faction === f && o.kind === 'volunteers').map(o => `<li><span>${esc(o.why || 'Добровольці')}</span><span>прибудуть о ${esc(Engine.timeLabel(Engine.addHours(state.time, o.arrive - state.time.turn)))}</span></li>`).join('')}</ul>` : ''}
       </div>
       <p class="notice">Доходи враховують підтримку населення та страйки. Загинули від ран: ${S.eco.deadOfWounds}. Одужали й повернулися в резерв: ${S.eco.recovered}. Доходи дають підконтрольні місто (${CONFIG.economy.income.city}/год) і села (${CONFIG.economy.income.village}/год).</p>`, root => {
+      const rb = root.querySelector('#rfBuy');
+      if (rb) rb.onclick = () => {
+        const r = Foreign.officialRequest(state, f, $('rfBuyItem').value, Math.floor(Number($('rfBuyQty').value) || 1), Number($('rfBuyStore').value));
+        if (!r.ok) toast(r.reason, true); else { toast(r.approved ? 'Запит схвалено — партію в дорозі.' : 'РФ відхилила запит.', !r.approved); renderAll(); openEconomy(); }
+      };
+      const rs = root.querySelector('#rfSell');
+      if (rs) rs.onclick = () => {
+        const r = Foreign.sellRF(state, f, $('rfSellItem').value, Math.floor(Number($('rfSellQty').value) || 1));
+        if (!r.ok) toast(r.reason, true); else { toast(`Партія вирушила до кордону — оплата ${r.price} грн після доставки.`); renderAll(); openEconomy(); }
+      };
       const b = root.querySelector('#bmBuy');
       if (b) b.onclick = () => {
         const r = Recruit.buy(state, f, $('bmItem').value, Math.floor(Number($('bmQty').value) || 1), Number($('bmStore').value));

@@ -2121,6 +2121,56 @@ const UI = (() => {
   }
   function openChronicle() { openPolitics('chron'); }
 
+  // Чорний ринок (повстанці)
+  function blackMarketHtml(f) {
+    return `      <div><h3 style="margin:0 0 6px;font-size:13px">Чорний ринок</h3>
+        <div class="form-row">
+          <label for="bmItem">Товар</label><select id="bmItem">${Object.entries(CONFIG.blackMarket.items).map(([k, it]) => `<option value="${esc(k)}">${esc(Recruit.itemName(k))} — ${it.n} ${esc(Recruit.itemUnit(k))} за ${it.price} грн</option>`).join('')}</select>
+          <label for="bmQty">Партій</label><input type="number" id="bmQty" value="1" min="1" max="20" style="width:70px;padding:4px 6px;background:var(--bg);border:1px solid var(--line)">
+          <label for="bmStore">Доставка</label><select id="bmStore">${Logistics.facilities(state).filter(x => Logistics.isStore(x) && x.owner === f && !x.destroyed).map(x => `<option value="${x.id}">${esc(x.name)}</option>`).join('')}</select>
+          <button type="button" class="primary" id="bmBuy">Замовити</button>
+        </div>
+        <p class="notice">Оплата одразу, доставка через ${CONFIG.blackMarket.deliveryHours} год. Якщо склад доставки втратите — партія пропаде.</p>
+        ${Recruit.orders(state).filter(o => o.faction === f).length ? `<ul class="list">${Recruit.orders(state).filter(o => o.faction === f).map(o => `<li><span>${esc(Recruit.itemName(o.key))} — ${o.n} ${esc(Recruit.itemUnit(o.key))}</span><span>прибуде о ${esc(Engine.timeLabel(Engine.addHours(state.time, o.arrive - state.time.turn)))}</span></li>`).join('')}</ul>` : ''}
+      </div>`;
+  }
+  // Торгівля з РФ (соц. влада): закупівля — офіційні запити (РФ може відмовити); продаж нафти,
+  // пального й продукції заводів через перехід «Росія».
+  function rfTradeHtml(f) {
+    const stores = Logistics.facilities(state).filter(x => Logistics.isStore(x) && x.owner === f && !x.destroyed);
+    const OS = CONFIG.officialSupply, RT = CONFIG.russiaTrade;
+    const fmt = n => Math.round(n).toLocaleString('uk-UA');
+    // порядок у списках: майно (нафта, пальне…) → боєприпаси → зброя
+    const KO = { goods: 0, ammo: 1, weapons: 2 };
+    const sorted = items => Object.entries(items).sort((a, b) => KO[a[1].kind] - KO[b[1].kind]);
+    const unit = k => CONFIG.ammo[k] ? 'шт.' : CONFIG.goods[k] ? CONFIG.goods[k].unit : 'шт.';
+    const offLeft = Foreign.officialCooldownLeft(state, f), saleLeft = Foreign.saleCooldownLeft(state, f);
+    const border = Foreign.borderReason(state, f, null);
+    const orders = Foreign.officialOrders(state).filter(o => o.faction === f);
+    const sales = Foreign.saleOrders(state).filter(o => o.faction === f);
+    const t = state.time.turn;
+    return `<div><h3 style="margin:0 0 6px;font-size:13px">Торгівля з РФ — через ${esc(Foreign.entryName(state, f))}</h3>
+      ${border ? `<p class="notice" style="color:var(--bad)">${esc(border)}</p>` : ''}
+      <h4 style="margin:6px 0 4px;font-size:12.5px">Закупівля (офіційний запит)</h4>
+      <div class="form-row">
+        <label for="rfBuyItem">Товар</label><select id="rfBuyItem">${sorted(OS.items).map(([k, it]) => `<option value="${esc(k)}">${esc(Foreign.officialItemName(k))} — ${it.n} ${esc(unit(k))} за ${it.price} грн</option>`).join('')}</select>
+        <label for="rfBuyQty">Партій</label><input type="number" id="rfBuyQty" value="1" min="1" max="20" style="width:70px;padding:4px 6px;background:var(--bg);border:1px solid var(--line)">
+        <label for="rfBuyStore">Доставка</label><select id="rfBuyStore">${stores.map(x => `<option value="${x.id}">${esc(x.name)}</option>`).join('')}</select>
+        <button type="button" class="primary" id="rfBuy" ${offLeft > 0 ? 'disabled' : ''}>Надіслати запит</button>
+      </div>
+      <p class="notice">РФ схвалює запит із шансом ${Math.round(Foreign.officialChance(state, f))}% (залежить від стосунків). Оплата лише за схвалену партію, доставка за ${OS.deliveryHours} год, запит — раз на ${OS.cooldownHours} год${offLeft > 0 ? ` (наступний через ${offLeft} год)` : ''}.</p>
+      ${orders.length ? `<ul class="list">${orders.map(o => `<li><span>${esc(Foreign.officialItemName(o.key))} ×${o.n}</span><span>прибуде через ${Math.max(0, o.arrive - t)} год</span></li>`).join('')}</ul>` : ''}
+      <h4 style="margin:10px 0 4px;font-size:12.5px">Продаж (експорт)</h4>
+      <div class="form-row">
+        <label for="rfSellItem">Товар</label><select id="rfSellItem">${sorted(RT.items).map(([k, it]) => `<option value="${esc(k)}">${esc(Foreign.officialItemName(k))} — ${it.n} ${esc(unit(k))} за ${Foreign.salePrice(state, f, k)} грн (є ${fmt(Foreign.saleAvailable(state, f, k))})</option>`).join('')}</select>
+        <label for="rfSellQty">Партій</label><input type="number" id="rfSellQty" value="1" min="1" max="${RT.maxBatches}" style="width:70px;padding:4px 6px;background:var(--bg);border:1px solid var(--line)">
+        <button type="button" class="primary" id="rfSell" ${saleLeft > 0 || border ? 'disabled' : ''}>Продати</button>
+      </div>
+      <p class="notice">Товар береться з ваших складів, НПЗ і нафтового термінала, пов’язаних своєю територією з переходом. Гроші — коли партія перетне кордон (≈${RT.deliveryHours} год); якщо перехід втратите раніше — партія пропаде. Ціна ×${Engine.fmt(Foreign.salePriceMult(state, f))} від базової (залежить від стосунків). Партія на експорт — раз на ${RT.cooldownHours} год${saleLeft > 0 ? ` (наступна через ${saleLeft} год)` : ''}.</p>
+      ${sales.length ? `<ul class="list">${sales.map(o => `<li><span>${esc(Foreign.officialItemName(o.key))} ×${o.n} → ${o.price} грн</span><span>на кордоні через ${Math.max(0, o.arrive - t)} год</span></li>`).join('')}</ul>` : ''}
+    </div>`;
+  }
+
   function openEconomy() {
     if (handover) return;
     const f = pf();
@@ -2155,16 +2205,7 @@ const UI = (() => {
         ${lossRows}
       </tbody></table></div>
       <p class="notice">У полоні тримаємо: ${fmt(prisHeld)} чол. Наших у полоні: ${fmt(prisLost)} чол.${uncollected > 0 ? ` Непоховані тіла своїх у полі (тиснуть на мораль, поки не забрані): ${fmt(uncollected)}.` : ''}</p></div>
-      <div><h3 style="margin:0 0 6px;font-size:13px">Чорний ринок</h3>
-        <div class="form-row">
-          <label for="bmItem">Товар</label><select id="bmItem">${Object.entries(CONFIG.blackMarket.items).map(([k, it]) => `<option value="${esc(k)}">${esc(Recruit.itemName(k))} — ${it.n} ${esc(Recruit.itemUnit(k))} за ${it.price} грн</option>`).join('')}</select>
-          <label for="bmQty">Партій</label><input type="number" id="bmQty" value="1" min="1" max="20" style="width:70px;padding:4px 6px;background:var(--bg);border:1px solid var(--line)">
-          <label for="bmStore">Доставка</label><select id="bmStore">${Logistics.facilities(state).filter(x => Logistics.isStore(x) && x.owner === f && !x.destroyed).map(x => `<option value="${x.id}">${esc(x.name)}</option>`).join('')}</select>
-          <button type="button" class="primary" id="bmBuy">Замовити</button>
-        </div>
-        <p class="notice">Оплата одразу, доставка через ${CONFIG.blackMarket.deliveryHours} год. Якщо склад доставки втратите — партія пропаде.</p>
-        ${Recruit.orders(state).filter(o => o.faction === f).length ? `<ul class="list">${Recruit.orders(state).filter(o => o.faction === f).map(o => `<li><span>${esc(Recruit.itemName(o.key))} — ${o.n} ${esc(Recruit.itemUnit(o.key))}</span><span>прибуде о ${esc(Engine.timeLabel(Engine.addHours(state.time, o.arrive - state.time.turn)))}</span></li>`).join('')}</ul>` : ''}
-      </div>
+      ${f === 0 ? rfTradeHtml(f) : blackMarketHtml(f)}
       <div><h3 style="margin:0 0 6px;font-size:13px">Геополітика</h3>
         <p class="notice">Прикордонний перехід: <b>${esc(Foreign.entryName(state, f))}</b> (${esc(Engine.grid(state).label(Foreign.entryIdx(state, f)))})${(() => { const br = Foreign.borderReason(state, f, null); return br ? ` — <span style="color:#b3261e">${esc(br)}</span>` : ' — відкритий.'; })()} Стосунки з патроном: <b>${Math.round(Foreign.geo(state, f))}%</b> (впливають на ціну й кулдаун нижче).</p>
       </div>
@@ -2192,6 +2233,16 @@ const UI = (() => {
         ${Foreign.queue(state).filter(o => o.faction === f && o.kind === 'volunteers').length ? `<ul class="list">${Foreign.queue(state).filter(o => o.faction === f && o.kind === 'volunteers').map(o => `<li><span>${esc(o.why || 'Добровольці')}</span><span>прибудуть о ${esc(Engine.timeLabel(Engine.addHours(state.time, o.arrive - state.time.turn)))}</span></li>`).join('')}</ul>` : ''}
       </div>
       <p class="notice">Доходи враховують підтримку населення та страйки. Загинули від ран: ${S.eco.deadOfWounds}. Одужали й повернулися в резерв: ${S.eco.recovered}. Доходи дають підконтрольні місто (${CONFIG.economy.income.city}/год) і села (${CONFIG.economy.income.village}/год).</p>`, root => {
+      const rb = root.querySelector('#rfBuy');
+      if (rb) rb.onclick = () => {
+        const r = Foreign.officialRequest(state, f, $('rfBuyItem').value, Math.floor(Number($('rfBuyQty').value) || 1), Number($('rfBuyStore').value));
+        if (!r.ok) toast(r.reason, true); else { toast(r.approved ? 'Запит схвалено — партію в дорозі.' : 'РФ відхилила запит.', !r.approved); renderAll(); openEconomy(); }
+      };
+      const rs = root.querySelector('#rfSell');
+      if (rs) rs.onclick = () => {
+        const r = Foreign.sellRF(state, f, $('rfSellItem').value, Math.floor(Number($('rfSellQty').value) || 1));
+        if (!r.ok) toast(r.reason, true); else { toast(`Партія вирушила до кордону — оплата ${r.price} грн після доставки.`); renderAll(); openEconomy(); }
+      };
       const b = root.querySelector('#bmBuy');
       if (b) b.onclick = () => {
         const r = Recruit.buy(state, f, $('bmItem').value, Math.floor(Number($('bmQty').value) || 1), Number($('bmStore').value));

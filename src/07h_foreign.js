@@ -114,11 +114,11 @@ const Foreign = (() => {
     return last == null ? 0 : Math.max(0, OS_().cooldownHours - (state.time.turn - last));
   }
   function officialChance(state, f) { return relLerp(state, f, OS_().acceptChanceAt0, OS_().acceptChanceAt100); }
+  // Назва товару будь-якого каталогу (закупівлі, продаж): боєприпаси, майно чи зброя
   function officialItemName(key) {
-    const it = OS_().items[key];
-    if (it.kind === 'weapons') return key;
-    if (it.kind === 'ammo') return CONFIG.ammo[key].name;
-    return CONFIG.goods[key].name;
+    if (CONFIG.ammo[key]) return CONFIG.ammo[key].name;
+    if (CONFIG.goods[key]) return CONFIG.goods[key].name;
+    return key;
   }
   function officialOrders(state) { if (!state.officialOrders) state.officialOrders = []; return state.officialOrders; }
   function officialReason(state, f, key, qty, store) {
@@ -163,6 +163,81 @@ const Foreign = (() => {
       const bucket = o.kind === 'weapons' ? store.stock.weapons : o.kind === 'ammo' ? store.stock.ammo : store.stock.goods;
       bucket[o.key] = (bucket[o.key] || 0) + o.n;
       Engine.log(state, `На «${store.name}» доставлено офіційну партію — ${officialItemName(o.key)} ×${o.n}.`, 'supply', o.faction);
+    }
+  }
+
+  // ---------------------------------------------------- продаж у РФ (запит гравця)
+  // Соц. влада продає нафту, пальне й продукцію заводів через перехід «Росія». Товар знімається
+  // одразу з її об’єктів, пов’язаних своєю територією з переходом; гроші — коли партія дійде
+  // до кордону. Перехід втрачено/заблоковано до того — партія пропала.
+  const RT_ = () => CONFIG.russiaTrade;
+  function saleOrders(state) { if (!state.rfSales) state.rfSales = []; return state.rfSales; }
+  function saleCooldownLeft(state, f) {
+    const last = (state.rfSaleLast || {})[f];
+    return last == null ? 0 : Math.max(0, RT_().cooldownHours - (state.time.turn - last));
+  }
+  function salePriceMult(state, f) { return relLerp(state, f, RT_().priceAt0, RT_().priceAt100); }
+  function salePrice(state, f, key) { const it = RT_().items[key]; return it ? Math.round(it.price * salePriceMult(state, f)) : 0; }
+  function bucketOf(st, kind) { return kind === 'weapons' ? st.weapons : kind === 'ammo' ? st.ammo : st.goods; }
+  // Об’єкти, з яких можна вивезти товар: свої, цілі, у тій самій частині території, що й перехід
+  function saleSources(state, f) {
+    const idx = entryIdx(state, f);
+    if (idx < 0) return [];
+    const net = Logistics.network(state, f);
+    if (net.comp[idx] < 0) return [];
+    return Logistics.facilities(state).filter(x => x.owner === f && !x.destroyed && x.stock && net.comp[x.idx] === net.comp[idx]);
+  }
+  function saleAvailable(state, f, key) {
+    const it = RT_().items[key];
+    if (!it) return 0;
+    return saleSources(state, f).reduce((a, x) => a + Math.floor(bucketOf(x.stock, it.kind)[key] || 0), 0);
+  }
+  function saleReason(state, f, key, qty) {
+    if (f !== 0) return 'Продаж у РФ доступний лише соц. владі.';
+    const it = RT_().items[key];
+    if (!it) return 'Невідомий товар.';
+    if (!(qty >= 1 && qty <= RT_().maxBatches)) return `Кількість партій — від 1 до ${RT_().maxBatches}.`;
+    const br = borderReason(state, f, null);
+    if (br) return br;
+    if (entryIdx(state, f) < 0) return 'Немає прикордонного переходу.';
+    const left = saleCooldownLeft(state, f);
+    if (left > 0) return `Наступна партія на експорт — через ${left} год.`;
+    const have = saleAvailable(state, f, key);
+    if (have < it.n * qty) return `Бракує товару на об’єктах, пов’язаних із переходом: потрібно ${it.n * qty}, є ${have}.`;
+    return null;
+  }
+  function sellRF(state, f, key, qty) {
+    if (Engine.phaseFaction(state) !== f) return { ok: false, reason: 'Лише у фазі своєї фракції.' };
+    const why = saleReason(state, f, key, qty);
+    if (why) return { ok: false, reason: why };
+    const it = RT_().items[key];
+    let need = it.n * qty;
+    // спершу зі складів, потім із виробництв (НПЗ, термінал, заводи) — ближчих до переходу
+    const g = Engine.grid(state), e = entryIdx(state, f);
+    const srcs = saleSources(state, f).sort((a, b) => (Logistics.isStore(b) ? 1 : 0) - (Logistics.isStore(a) ? 1 : 0) || g.dist(a.idx, e) - g.dist(b.idx, e) || a.id - b.id);
+    for (const x of srcs) {
+      if (need <= 0) break;
+      const b = bucketOf(x.stock, it.kind);
+      const take = Math.min(need, Math.floor(b[key] || 0));
+      if (take > 0) { b[key] -= take; need -= take; }
+    }
+    const price = salePrice(state, f, key) * qty;
+    if (!state.rfSaleLast) state.rfSaleLast = {};
+    state.rfSaleLast[f] = state.time.turn;
+    const o = { id: (state.nextMarketId = (state.nextMarketId || 0) + 1), faction: f, key, qty, n: it.n * qty, kind: it.kind, price, arrive: state.time.turn + RT_().deliveryHours };
+    saleOrders(state).push(o);
+    Engine.log(state, `Експорт у РФ: ${officialItemName(key)} ×${o.n} вирушило до «${entryName(state, f)}». Оплата ${price} грн — коли партія перетне кордон (≈${RT_().deliveryHours} год).`, 'event', f);
+    return { ok: true, price };
+  }
+  function hourSales(state) {
+    for (const o of saleOrders(state).slice()) {
+      if (state.time.turn + 1 < o.arrive) continue;
+      state.rfSales = saleOrders(state).filter(x => x !== o);
+      const br = borderReason(state, o.faction, null);
+      if (br) { Engine.log(state, `Експортна партія «${officialItemName(o.key)}» ×${o.n} пропала: ${br}`, 'warn', o.faction); continue; }
+      Logistics.ensureEconomy(state)[o.faction].money += o.price;
+      Engine.log(state, `Експорт у РФ: партію «${officialItemName(o.key)}» ×${o.n} прийнято, отримано ${o.price} грн.`, 'supply', o.faction);
+      adjustGeo(state, o.faction, RT_().geoPerSale, 'торгівля через кордон');
     }
   }
 
@@ -331,10 +406,11 @@ const Foreign = (() => {
       Intel.update(state);
     }
     hourOfficial(state);
+    hourSales(state);
     hourInvestment(state);
   }
 
-  return {
+  return { saleOrders, saleCooldownLeft, salePrice, salePriceMult, saleSources, saleAvailable, saleReason, sellRF,
     geo, patron, adjustGeo, entryIdx, entryName, borderReason,
     pmcItems, pmcPrice, pmcCooldownLeft, pmcReason, hirePmc,
     officialReason, officialRequest, officialCooldownLeft, officialChance, officialOrders, officialItemName,
