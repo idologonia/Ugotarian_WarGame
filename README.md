@@ -4,14 +4,32 @@
 Демократичні повстанці, Націоналістичні повстанці). Гра — один HTML-файл без залежностей:
 відкривається просто в браузері, гра hot-seat з туманом війни.
 
-## Швидкий старт
+## Як запустити
+
+**У браузері, без встановлення:** https://idologonia.github.io/Ugotarian_WarGame/
+(публікується автоматично з гілки `main`, див. нижче).
+
+**З диска:** завантажте файл [`dist/Yugotaria-Civil-War.html`](dist/Yugotaria-Civil-War.html)
+(кнопка «Download raw file» на GitHub) і відкрийте його в браузері. Інтернет потрібен лише
+для шрифтів — без нього гра працює зі звичайними.
+
+**Із вихідного коду** (потрібен Node.js 18+):
 
 ```bash
+git clone https://github.com/idologonia/Ugotarian_WarGame.git
+cd Ugotarian_WarGame
 node build.js                 # зібрати dist/
-npm test                      # зібрати + усі тести правил (≈20 с)
+npm test                      # зібрати + усі тести правил (≈25 с)
 ```
 
-Відкрити `dist/Yugotaria-Civil-War.html` у браузері.
+Потім відкрийте `dist/Yugotaria-Civil-War.html` у браузері.
+
+### Публікація на GitHub Pages
+
+Workflow `.github/workflows/pages.yml` на кожен пуш у `main` збирає гру, проганяє тести й
+викладає її на Pages (головна сторінка — гра, старі етапи — у `releases/`). Один раз
+треба ввімкнути: **Settings → Pages → Build and deployment → Source: GitHub Actions**,
+потім **Actions → «Збірка й публікація гри» → Run workflow** (або будь-який пуш у `main`).
 
 Потрібен лише Node.js (18+). Для UI-тестів — ще Python 3 з `pip install playwright`.
 
