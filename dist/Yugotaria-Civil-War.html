@@ -197,6 +197,29 @@ aside, #log { background: var(--panel); min-height: 0; min-width: 0; }
   background-image: repeating-linear-gradient(135deg, transparent 0 22px, color-mix(in srgb, var(--line) 35%, transparent) 22px 23px);
 }
 #handover[hidden] { display: none; }
+/* Панель ходу ботів / режиму глядача у верхньому рядку */
+#botbar { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; font-size: 13px; }
+#botbar[hidden] { display: none; }
+#botbar .who { color: var(--muted); display: inline-flex; gap: 6px; align-items: center; }
+#botbar select { background: var(--bg); border: 1px solid var(--line); border-radius: 3px; padding: 3px 4px; margin-left: 4px; }
+#botbar button { padding: 3px 9px; }
+/* Головне меню */
+#mainmenu { position: fixed; inset: 0; z-index: 25; background: var(--bg); overflow-y: auto; display: grid; place-items: center; padding: 24px 16px;
+  background-image: repeating-linear-gradient(135deg, transparent 0 22px, color-mix(in srgb, var(--line) 35%, transparent) 22px 23px); }
+#mainmenu[hidden] { display: none; }
+.mm-card { background: var(--panel); border: 1px solid var(--line); border-top: 8px solid var(--accent); width: min(560px, 100%); padding: 26px 28px; display: flex; flex-direction: column; gap: 18px; }
+.mm-card h1 { margin: 0; font-size: 30px; letter-spacing: 0.1em; text-transform: uppercase; }
+.mm-card h1 small { display: block; font-size: 13px; letter-spacing: 0.14em; color: var(--muted); font-weight: 500; margin-top: 4px; }
+.mm-card h2 { margin: 0; font-size: 14px; text-transform: uppercase; letter-spacing: 0.08em; }
+.mm-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.mm-new { display: flex; flex-direction: column; gap: 12px; border-top: 1px solid var(--line); padding-top: 16px; }
+.mm-new .notice { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.45; }
+.mm-new .notice.warn { color: var(--warn); }
+.mm-sides { display: flex; flex-direction: column; gap: 6px; }
+.mm-side { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; padding: 8px 10px; background: var(--panel-2); border: 1px solid var(--line); }
+.mm-side .nm { font-weight: 600; }
+.mm-side select { background: var(--bg); border: 1px solid var(--line); border-radius: 3px; padding: 5px 6px; min-width: 150px; }
+@media (max-width: 520px) { .mm-card { padding: 20px 16px; } .mm-side { grid-template-columns: auto 1fr; } .mm-side select { grid-column: 1 / -1; width: 100%; } }
 .ho-card { background: var(--panel); border: 1px solid var(--line); border-top: 8px solid; padding: 26px 30px; max-width: 460px; text-align: center; display: flex; flex-direction: column; gap: 12px; align-items: center; }
 .ho-card h2 { margin: 0; font-size: 26px; text-transform: uppercase; letter-spacing: 0.06em; text-wrap: balance; }
 .ho-card p { margin: 0; color: var(--muted); line-height: 1.45; }
@@ -275,11 +298,12 @@ button.mini { font-size: 12px; padding: 2px 8px; }
     <div class="brand">Юготарія <small>етап 4+</small></div>
     <div class="clock" id="clock"></div>
     <div class="phases" id="phases"></div>
+    <div id="botbar" hidden></div>
     <div class="spacer"></div>
     <div class="top-actions">
       <button id="btnEndPhase" class="primary" type="button">Завершити фазу ▸</button>
       <button id="btnSaves" type="button">Збереження</button>
-      <button id="btnNew" type="button">Нова гра</button>
+      <button id="btnNew" type="button">Меню</button>
       <button id="btnEco" type="button">Економіка</button>
       <button id="btnPol" type="button">Політика</button>
       <button id="btnHelp" type="button">Довідка</button>
@@ -321,6 +345,7 @@ button.mini { font-size: 12px; padding: 2px 8px; }
     <div id="logbody"></div>
   </section>
 </div>
+<div id="mainmenu" hidden></div>
 <div id="toast"></div>
 <div id="modalRoot"></div>
 
@@ -7547,11 +7572,689 @@ const SaveSystem = (() => {
   return { serialize, deserialize, listSlots, saveToSlot, loadFromSlot, deleteSlot, slotName, storageAvailable: () => !!storage() };
 })();
 
+// ---- 09_ai.js
+// ============================================================================
+// МОДУЛЬ: ШТУЧНИЙ ІНТЕЛЕКТ (БОТИ)
+// Бот керує фракцією у її фазі через ті самі функції, що й гравець (Engine, Combat,
+// Logistics, Recruit, Politics) — тож обійти правила не може. Обидва рівні чесні:
+// про противника знають лише те, що є в розвідці фракції (Intel.knownList).
+//   easy — прямолінійний: кожен підрозділ іде до найближчого чужого пункту, стріляє
+//          в першого видимого ворога, не зважає на співвідношення сил, не поповнюється.
+//   hard — штаб: тримає гарнізони за загрозою, зосереджує сили на одній цілі, чекає
+//          підходу групи перед штурмом, фокусує вогонь, відводить зламані підрозділи,
+//          поповнює боєприпаси, підвозить піхоту машинами, формує нові підрозділи,
+//          відповідає на дипломатичні пропозиції з розрахунком.
+// Рішення детерміновані (hash2 замість Math.random) — однакова гра дає однакові ходи.
+// Пам’ять бота (state.ai) — звичайні дані, зберігаються разом із грою.
+// ============================================================================
+const AI = (() => {
+  const LEVELS = ['easy', 'hard'];
+  const CONTROLLER_NAMES = { human: 'Людина', easy: 'Бот (легкий)', hard: 'Бот (важкий)' };
+
+  // ------------------------------------------------------------ гравці
+  // state.players[f] = { type: 'human' } | { type: 'ai', level: 'easy' | 'hard' }
+  function configure(state, list) {
+    state.players = [0, 1, 2].map(f => {
+      const k = list && list[f];
+      return LEVELS.includes(k) ? { type: 'ai', level: k } : { type: 'human' };
+    });
+    state.ai = { mem: [{}, {}, {}] };
+    return state;
+  }
+  function controller(state, f) {
+    const p = state.players && state.players[f];
+    return p && p.type === 'ai' && LEVELS.includes(p.level) ? p.level : 'human';
+  }
+  function isBot(state, f) { return f != null && controller(state, f) !== 'human'; }
+  function humans(state) { return [0, 1, 2].filter(f => !isBot(state, f)); }
+  function mem(state, f) {
+    if (!state.ai) state.ai = { mem: [{}, {}, {}] };
+    const m = state.ai.mem[f] || (state.ai.mem[f] = {});
+    if (!m.tasks) m.tasks = {};
+    return m;
+  }
+
+  // ------------------------------------------------------------ довідники
+  const COVER = { plain: 0, farmland: 0.5, coast: 0, swamp: 0, forest: 2, denseForest: 3, mountains: 2.5, village: 2, city: 3, industrial: 2.5, sea: 0 };
+  const settlementHexCache = new WeakMap();
+  function settlementHexes(state) {
+    let c = settlementHexCache.get(state.map);
+    if (!c) {
+      c = state.map.settlements.map(() => []);
+      for (let i = 0; i < state.map.settlement.length; i++) { const s = state.map.settlement[i]; if (s >= 0 && c[s]) c[s].push(i); }
+      settlementHexCache.set(state.map, c);
+    }
+    return c;
+  }
+
+  function role(u) {
+    if (Transport.isVehicle(u)) return u.type === 'veh_mtlb' || u.mount ? 'armor' : 'transport';
+    if (Combat.hasIndirect(u)) return 'artillery';
+    switch (u.type) {
+      case 'hmg_team': return 'support';
+      case 'recon': return 'recon';
+      case 'ew_team': return 'ew';
+      case 'medevac': case 'supply_team': case 'eng_squad': case 'crew': return 'rear';
+      default: return 'infantry';
+    }
+  }
+  const ROLE_WEIGHT = { infantry: 1, support: 2.5, armor: 4, transport: 0.3, artillery: 0.8, recon: 0.8, ew: 0.3, rear: 0.4 };
+
+  // Бойова вага свого підрозділу (точні дані — це наш підрозділ)
+  function power(u) {
+    if (u.personnel.fit <= 0) return 0;
+    const r = role(u);
+    let p = u.personnel.fit * ROLE_WEIGHT[r];
+    if (r === 'armor') p = 12 * Math.max(0.2, (u.vehicle ? u.vehicle.condition : 100) / 100);
+    p *= 0.4 + 0.6 * Math.max(0, Math.min(100, u.morale)) / 100;
+    p *= 1 - Math.min(0.6, (u.suppression || 0) / 100);
+    if (Logistics.supplyLevel(u) < 0.15) p *= 0.4;
+    return p;
+  }
+  // Оцінка ворога за позначкою розвідки: чисельність — якщо відома, інакше штат типу або «середнє»
+  function markPower(m) {
+    const ut = m.type ? CONFIG.unitTypes[m.type] : null;
+    if (m.cls === 'vehicle' && (!ut || m.type === 'veh_mtlb')) return 10;
+    if (m.cls === 'vehicle') return 2;
+    let n = m.fit != null ? m.fit : ut ? ut.personnel : 6;
+    let w = 1;
+    if (m.type === 'hmg_team' || m.type === 'ags_team' || m.type === 'mg_team') w = 2.5;
+    else if (m.type === 'medevac' || m.type === 'supply_team' || m.type === 'ew_team') w = 0.4;
+    const fade = m.visible ? 1 : Math.max(0.3, 1 - 0.1 * m.age);
+    return n * w * fade;
+  }
+
+  // Детермінована «випадковість» для бота
+  function roll(state, f, a, b) {
+    return hash2((((state.meta && state.meta.seed) || 1999) >>> 0) ^ Math.imul(f + 7, 2654435761), state.time.turn * 31 + a, b);
+  }
+
+  // ------------------------------------------------------------ контекст фази
+  function buildCtx(state, f, level) {
+    const g = Engine.grid(state);
+    const known = Intel.knownList(state, f).filter(m => m.age <= 8);
+    const enemies = known.map(m => ({ m, idx: m.idx, pow: markPower(m), visible: m.visible }));
+    const own = state.units.filter(u => u.faction === f && u.personnel.fit > 0);
+    const allied = x => x >= 0 && x !== f && Politics.allied(state, f, x);
+    const hexesOf = settlementHexes(state);
+    const objectives = (state.campaign && state.campaign.objectives && state.campaign.objectives[f]) || [];
+    const settlements = state.map.settlements.map((s, k) => {
+      const radius = s.kind === 'city' ? 4 : 2;
+      let enemyPow = 0, ownPow = 0, threat = 0;
+      for (const e of enemies) {
+        const d = g.dist(e.idx, s.center);
+        if (d <= radius + 1) enemyPow += e.pow;
+        // загроза — і ті, хто ще на підході (кілька гексів за межею пункту)
+        if (d <= radius + 6) threat += e.pow * (d <= radius + 2 ? 1 : 0.6);
+      }
+      for (const u of own) if (g.dist(u.idx, s.center) <= radius + 1) ownPow += power(u);
+      const objPts = objectives.filter(o => o.type === 'holdSettlement' && o.settlement === k).reduce((a, o) => a + o.points, 0);
+      const value = objPts + (s.kind === 'city' ? 15 : 6);
+      return { s, k, radius, hexes: hexesOf[k] || [], enemyPow, threat, ownPow, value, mine: s.control === f, friendly: s.control === f || allied(s.control) };
+    });
+    return { state, f, level, g, enemies, own, settlements, mem: mem(state, f), acted: new Set(), focus: new Map(), stats: { attacks: 0, moves: 0, stances: 0, other: 0 } };
+  }
+
+  const ok = r => r && r.ok;
+  function safe(ctx, label, fn) {
+    try { return fn(); }
+    catch (e) { if (typeof console !== 'undefined') console.error(`ШІ (${CONFIG.factions[ctx.f].short}) — ${label}:`, e); return null; }
+  }
+  const nearestEnemyDist = (ctx, idx) => { let b = Infinity; for (const e of ctx.enemies) b = Math.min(b, ctx.g.dist(idx, e.idx)); return b; };
+  const visibleEnemyNear = (ctx, idx, r) => ctx.enemies.some(e => e.visible && ctx.g.dist(idx, e.idx) <= r);
+  function inSettlement(ctx, idx) { const k = ctx.state.map.settlement[idx]; return k >= 0 ? ctx.settlements[k] : null; }
+  function canAttackNow(state, u) { return u.attackedTurn !== state.time.turn && u.embarked == null && Engine.canAct(u); }
+
+  // ------------------------------------------------------------ накази
+  function moveTo(ctx, u, target, kind = 'move') {
+    if (target == null || target < 0 || target === u.idx) return false;
+    if (u.order && u.order.target === target && u.order.type === kind) return true;
+    if (u.pendingOrder && u.pendingOrder.target === target) return true;
+    const r = Engine.issueMoveOrder(ctx.state, u.id, target, kind);
+    if (ok(r)) { ctx.stats.moves++; return true; }
+    return false;
+  }
+  // Найкращий гекс для виходу поблизу center на відстані [rMin, rMax]: прохідний, без відомого
+  // противника, з укриттям, ближче до підрозділу. Пробуємо кілька кращих — шлях може бути неможливим.
+  function moveNear(ctx, u, center, rMin, rMax, opts = {}) {
+    const { state, g } = ctx;
+    const cls = Engine.moveClass(u);
+    const foreign = Engine.knownForeignHexes(state, ctx.f);
+    const taken = opts.taken || new Set();
+    const cands = [];
+    for (const i of g.within(center, rMax)) {
+      const d = g.dist(i, center);
+      if (d < rMin || foreign.has(i) || !Engine.hexPassable(state, cls, i)) continue;
+      const enemyD = nearestEnemyDist(ctx, i);
+      if (opts.safeDist && enemyD < opts.safeDist) continue;
+      let score = -g.dist(u.idx, i) * 0.6 + (COVER[Engine.terrainKey(state, i)] || 0) * (opts.coverW != null ? opts.coverW : 1);
+      if (taken.has(i)) score -= 3;
+      if (opts.preferSettlement != null && state.map.settlement[i] === opts.preferSettlement) score += 2;
+      if (opts.towards != null) score -= g.dist(i, opts.towards) * 0.5;
+      cands.push({ i, score });
+    }
+    cands.sort((a, b) => b.score - a.score || a.i - b.i);
+    if (cands.length && cands[0].i === u.idx) return 'here';
+    for (const c of cands.slice(0, opts.tries || 3)) {
+      if (c.i === u.idx) return 'here';
+      if (moveTo(ctx, u, c.i, opts.kind || 'move')) { taken.add(c.i); return c.i; }
+    }
+    return null;
+  }
+  function hold(ctx, u, stance = 'defend') {
+    if (u.order || u.pendingOrder) return false;
+    if (u.stance === stance) return true;
+    if (u.embarked != null || Transport.isVehicle(u)) return false;
+    const r = Engine.setStance(ctx.state, u.id, stance);
+    if (ok(r)) ctx.stats.stances++;
+    return ok(r);
+  }
+
+  // ------------------------------------------------------------ вогонь
+  // Обрати найкращу ціль для u й атакувати. Повертає true, якщо атака відбулася.
+  function fire(ctx, u) {
+    const { state, g, level } = ctx;
+    if (!canAttackNow(state, u)) return false;
+    const indirect = Combat.hasIndirect(u);
+    if (indirect && Combat.needsDeploy(u) && !u.deployed) {
+      if (u.order) return false;
+      if (!ok(Engine.deploy(state, u.id))) return false;
+    }
+    const maxR = Math.max(1, Math.floor(Combat.maxRange(u, indirect, state) / CONFIG.hexMeters));
+    const cands = [];
+    for (const e of ctx.enemies) {
+      const d = g.dist(u.idx, e.idx);
+      if (d > maxR) continue;
+      if (!e.visible && (!indirect || level === 'easy' || e.m.age > 2)) continue;
+      const target = e.visible ? { unitId: e.m.id } : { hex: e.idx };
+      cands.push({ e, d, target });
+    }
+    if (!cands.length) return false;
+    const myPow = power(u);
+    const ammo = Logistics.supplyLevel(u);
+    const scored = [];
+    for (const c of cands) {
+      const pv = Combat.previewAttack(state, u.id, c.target, 'normal');
+      if (!pv.ok || (pv.breaks && pv.breaks.length)) continue;
+      let score;
+      if (level === 'easy') score = -c.d - roll(state, ctx.f, u.id, c.e.m.id) * 2;
+      else {
+        const sk = state.map.settlement[c.e.idx];
+        score = 10 / (1 + c.e.pow);                                   // слабку ціль легше добити
+        if (sk >= 0) score += ctx.settlements[sk].mine ? 3 : ctx.mem.target === sk ? 2.5 : 0.5;
+        // ворог у центрі пункту вирішує, чий пункт, — вибити його найважливіше
+        if (sk >= 0 && ctx.settlements[sk].s.center === c.e.idx && (ctx.settlements[sk].mine || ctx.mem.target === sk)) score += 6;
+        score += (ctx.focus.get(c.e.m.id) || 0) * 2;                   // зосередження вогню
+        if (c.e.m.cls === 'vehicle' && Object.keys(u.weapons).some(m => CONFIG.weapons[m] && CONFIG.weapons[m].at >= 50 && u.weapons[m] > 0)) score += 4;
+        if (!indirect) {
+          // прямий вогонь — це перестрілка: не лізти на значно сильнішого, якщо не з позицій.
+          // Рахуємо всю свою силу поруч із ціллю — сусіди теж стрілятимуть цієї фази.
+          let local = myPow;
+          for (const o of ctx.own) if (o !== u && o.embarked == null && g.dist(o.idx, c.e.idx) <= 2 && role(o) !== 'transport') local += power(o);
+          const ratio = local / Math.max(0.5, c.e.pow);
+          const dug = u.stance === 'defend' && u.fort > 0;
+          if (ratio < (dug ? 0.35 : 0.7)) continue;
+          score += Math.min(3, ratio);
+        }
+        if (!c.e.visible) score -= 2;
+        score -= c.d * 0.2;
+      }
+      scored.push({ c, score });
+    }
+    if (!scored.length) return false;
+    scored.sort((a, b) => b.score - a.score);
+    const best = scored[0].c;
+    let intensity = 'normal';
+    if (level === 'hard') {
+      const key = state.map.settlement[best.e.idx] >= 0;
+      if (ammo < 0.25) intensity = 'low';
+      else if (ammo > 0.6 && (key || (ctx.focus.get(best.e.m.id) || 0) > 0)) intensity = 'high';
+    }
+    let r = Combat.attack(state, u.id, best.target, intensity);
+    if (!ok(r) && intensity !== 'normal') r = Combat.attack(state, u.id, best.target, 'normal');
+    if (!ok(r)) return false;
+    ctx.stats.attacks++;
+    ctx.focus.set(best.e.m.id, (ctx.focus.get(best.e.m.id) || 0) + 1);
+    ctx.acted.add(u.id);
+    refreshEnemies(ctx);
+    return true;
+  }
+  // Після бою картина змінюється (ворог відступив / знищений) — оновлюємо відомості
+  function refreshEnemies(ctx) {
+    const known = Intel.knownList(ctx.state, ctx.f).filter(m => m.age <= 8);
+    ctx.enemies = known.map(m => ({ m, idx: m.idx, pow: markPower(m), visible: m.visible }));
+  }
+
+  // ------------------------------------------------------------ дипломатія
+  function threatOf(ctx, x) {
+    const { g } = ctx;
+    let t = 0;
+    for (const e of ctx.enemies) {
+      if (e.m.faction !== x) continue;
+      const near = ctx.own.some(u => g.dist(u.idx, e.idx) <= 6) || ctx.settlements.some(s => s.mine && g.dist(s.s.center, e.idx) <= 6);
+      t += near ? e.pow : e.pow * 0.3;
+    }
+    return t;
+  }
+  function diplomacy(ctx) {
+    const { state, f, level } = ctx;
+    const inc = Politics.incoming(state, f);
+    if (!inc.length) return;
+    const threats = [0, 1, 2].map(x => x === f ? -1 : threatOf(ctx, x));
+    const main = threats.indexOf(Math.max(...threats));
+    for (const p of inc) {
+      let accept;
+      if (level === 'easy') {
+        accept = (p.type === 'ceasefire' || p.type === 'intel' || p.type === 'exchange') && roll(state, f, p.id, 3) < 0.5;
+      } else {
+        const fromMain = p.from === main && threats[main] > 0;
+        switch (p.type) {
+          case 'ceasefire': case 'alliance': accept = !fromMain || threats[p.from] < 5; break;
+          case 'intel': case 'supply': case 'corridor': accept = !fromMain; break;
+          case 'territory': accept = p.terms && p.terms.giver !== f; break;
+          case 'exchange': accept = true; break;
+          default: accept = false;
+        }
+      }
+      const r = Politics.respond(state, p.id, !!accept);
+      if (ok(r)) ctx.stats.other++;
+    }
+  }
+
+  // ------------------------------------------------------------ економіка (важкий)
+  function economy(ctx) {
+    const { state, f, g } = ctx;
+    const eco = Logistics.ensureEconomy(state)[f];
+    const stores = Logistics.facilities(state).filter(x => Logistics.isStore(x) && x.owner === f && !x.destroyed);
+    if (!stores.length) return;
+    if (eco.money < 1200) return;
+    const roles = {};
+    for (const u of ctx.own) roles[role(u)] = (roles[role(u)] || 0) + 1;
+    const enemyArmor = ctx.enemies.some(e => e.m.cls === 'vehicle');
+    const prio = [];
+    if (enemyArmor && (roles.infantry || 0) > 3) prio.push('at_team');
+    if ((roles.artillery || 0) < 2) prio.push('mortar');
+    prio.push('inf_squad', 'mg_team', 'inf_platoon', 'at_team');
+    // найбезпечніший склад — найдалі від відомого противника
+    stores.sort((a, b) => nearestEnemyDist(ctx, b.idx) - nearestEnemyDist(ctx, a.idx) || a.id - b.id);
+    const queued = (state.formations || []).filter(x => x.faction === f).length;
+    if (queued >= 2) return;
+    for (const st of stores) {
+      for (const t of prio) {
+        if (Recruit.formReason(state, f, st, t)) continue;
+        if (ok(Recruit.form(state, f, st.id, t))) { ctx.stats.other++; return; }
+      }
+    }
+    void g;
+  }
+
+  // ------------------------------------------------------------ поповнення
+  function tryResupply(ctx, u) {
+    if (u.embarked != null || Logistics.supplyLevel(u) > 0.8) return false;
+    if (Logistics.resupplyReason(ctx.state, u)) return false;
+    const r = Logistics.resupply(ctx.state, u.id);
+    if (ok(r)) { ctx.stats.other++; ctx.acted.add(u.id); return true; }
+    return false;
+  }
+  function goResupply(ctx, u) {
+    const stores = Logistics.facilities(ctx.state).filter(x => Logistics.isStore(x) && (x.owner === ctx.f || Politics.sharesSupply(ctx.state, x.owner, ctx.f)) && !x.destroyed);
+    stores.sort((a, b) => ctx.g.dist(u.idx, a.idx) - ctx.g.dist(u.idx, b.idx) || a.id - b.id);
+    for (const st of stores.slice(0, 2)) {
+      if (ctx.g.dist(u.idx, st.idx) <= 1) return tryResupply(ctx, u);
+      if (moveNear(ctx, u, st.idx, 0, 1, { tries: 2 })) return true;
+    }
+    return false;
+  }
+
+  // ------------------------------------------------------------ відступ
+  function broken(ctx, u) {
+    const share = u.personnel.fit / Math.max(1, u.personnel.assigned);
+    if (ctx.level === 'easy') return u.morale < 20;
+    return u.morale < 35 || (share < 0.35 && role(u) !== 'transport');
+  }
+  function retreat(ctx, u) {
+    if (!visibleEnemyNear(ctx, u.idx, 2)) return false;
+    // до найближчого свого пункту без противника, інакше — куди підкаже рушій
+    const home = ctx.settlements.filter(s => s.friendly && s.enemyPow < 1)
+      .sort((a, b) => ctx.g.dist(u.idx, a.s.center) - ctx.g.dist(u.idx, b.s.center))[0];
+    if (home && ctx.g.dist(u.idx, home.s.center) > 1 && moveNear(ctx, u, home.s.center, 0, home.radius, { kind: 'retreat', tries: 2, safeDist: 2 })) return true;
+    const h = Engine.suggestRetreat(ctx.state, u.id);
+    return h != null && moveTo(ctx, u, h, 'retreat');
+  }
+
+  // ------------------------------------------------------------ транспорт (важкий)
+  // Машина з пасажирами: везе їх до їхньої цілі й висаджує за 3+ гекси від відомого ворога.
+  function driveVehicle(ctx, v) {
+    const { state, g } = ctx;
+    const pass = Transport.passengers(state, v);
+    if (!pass.length) return false;
+    const task = ctx.mem.tasks[v.id];
+    const dest = task && task.drop != null ? task.drop : null;
+    const danger = nearestEnemyDist(ctx, v.idx) <= 3;
+    if (dest == null || v.idx === dest || danger || (g.dist(v.idx, dest) <= 1 && !v.order)) {
+      if (ok(Transport.disembarkAll(state, v.id))) { delete ctx.mem.tasks[v.id]; ctx.stats.other++; return true; }
+      return false;
+    }
+    return moveTo(ctx, v, dest);
+  }
+  // Посадити піший підрозділ у вільну машину того ж гекса, якщо йти далеко
+  function rideIfFar(ctx, u, goal) {
+    const { state, g } = ctx;
+    if (ctx.level !== 'hard' || u.embarked != null || Engine.moveClass(u) !== 'foot' || g.dist(u.idx, goal) < 12) return false;
+    if (u.mp < Engine.mpMax(u) * 0.5) return false;
+    const opts = Transport.vehiclesFor(state, u).filter(x => !x.reason && x.free >= Transport.persons(u) && role(x.v) === 'transport' && !Transport.passengers(state, x.v).length);
+    if (!opts.length) return false;
+    const v = opts[0].v;
+    // точка висадки: на шляху до цілі, за 3+ гекси від відомого противника
+    let drop = null, best = Infinity;
+    for (const i of g.within(goal, 7)) {
+      const d = g.dist(i, goal);
+      if (d < 3 || nearestEnemyDist(ctx, i) < 4 || !Engine.hexPassable(state, Engine.moveClass(v), i)) continue;
+      const sc = d * 2 + g.dist(v.idx, i) * 0.2;
+      if (sc < best) { best = sc; drop = i; }
+    }
+    if (drop == null || g.dist(v.idx, drop) < 8) return false;
+    if (!Engine.previewMove(state, v.id, drop).ok) return false;
+    if (!ok(Transport.board(state, u.id, v.id))) return false;
+    ctx.mem.tasks[v.id] = { drop };
+    ctx.stats.other++;
+    ctx.acted.add(u.id);
+    driveVehicle(ctx, v);
+    return true;
+  }
+
+  // ------------------------------------------------------------ легкий бот
+  function militaryEasy(ctx) {
+    const { state, g, f } = ctx;
+    const units = ctx.own.filter(u => u.embarked == null).sort((a, b) => a.id - b.id);
+    for (const u of units) {
+      if (!Engine.canAct(u)) continue;
+      const r = role(u);
+      if (broken(ctx, u) && safe(ctx, 'відступ', () => retreat(ctx, u))) continue;
+      if (r !== 'transport' && r !== 'ew' && r !== 'rear' && safe(ctx, 'вогонь', () => fire(ctx, u))) continue;
+      if (r === 'artillery' || r === 'transport' || r === 'rear') continue;
+      if (r === 'ew' || r === 'recon') { hold(ctx, u, 'observe'); continue; }
+      if (u.order) continue;
+      const here = inSettlement(ctx, u.idx);
+      // частина підрозділів просто сидить у своєму пункті
+      if (here && here.mine && (visibleEnemyNear(ctx, u.idx, 3) || roll(state, f, u.id, 1) < 0.35)) { hold(ctx, u); continue; }
+      const targets = ctx.settlements.filter(s => !s.friendly)
+        .map(s => ({ s, d: g.dist(u.idx, s.s.center) + roll(state, f, u.id, s.k + 11) * 6 }))
+        .sort((a, b) => a.d - b.d);
+      if (!targets.length) { hold(ctx, u); continue; }
+      const t = targets[0].s;
+      if (!safe(ctx, 'рух', () => moveTo(ctx, u, t.s.center))) safe(ctx, 'рух', () => moveNear(ctx, u, t.s.center, 1, 2, { tries: 2 }));
+    }
+  }
+
+  // ------------------------------------------------------------ важкий бот
+  // Скільки сили потрібно, щоб узяти пункт: відомий противник + припущення про ту частину
+  // пункту, яку зараз не видно (туман війни — порожнім невидиме місто не вважаємо).
+  function needFor(ctx, s) {
+    const hexes = s.hexes.length ? s.hexes : [s.s.center];
+    let seen = 0;
+    for (const i of hexes) if (Intel.hexObserved(ctx.state, ctx.f, i)) seen++;
+    const hidden = 1 - seen / hexes.length;
+    const assumed = (s.s.kind === 'city' ? 60 : 6) * hidden;
+    return Math.max(4, (s.enemyPow + assumed) * 1.4);
+  }
+
+  // Оцінка всіх чужих пунктів як цілей для сили offPow (більше — краще)
+  function rankTargets(ctx, offPow) {
+    const { g } = ctx;
+    const own = ctx.own.filter(u => ['infantry', 'support', 'armor'].includes(role(u)));
+    const distFrom = s => {
+      let d = Infinity;
+      for (const x of ctx.settlements) if (x.mine) d = Math.min(d, g.dist(x.s.center, s.s.center));
+      for (const u of own) d = Math.min(d, g.dist(u.idx, s.s.center) + 2);
+      return d;
+    };
+    const out = [];
+    for (const s of ctx.settlements) {
+      if (s.friendly) continue;
+      const need = needFor(ctx, s);
+      const feas = Math.min(1.5, offPow / need);
+      let score = s.value * feas * feas / (1 + distFrom(s) / 6);
+      if (feas < 0.8) score *= 0.3;
+      out.push({ s, need, feas, score });
+    }
+    return out.sort((x, y) => y.score - x.score || x.s.k - y.s.k);
+  }
+
+  // Наступ із зобов’язаннями: підрозділ тримається своєї цілі щонайменше COMMIT_HOURS годин
+  // (марш через пів карти туди-сюди — найгірше, що може зробити штаб), змінює її раніше лише
+  // коли ціль уже наша або відомий противник там утричі сильніший за всю групу.
+  const COMMIT_HOURS = 4;
+  function planGroups(ctx, strike) {
+    const { g, state } = ctx;
+    if (!strike.length) return [];
+    const offPow = strike.reduce((a, u) => a + power(u), 0);
+    const ranked = rankTargets(ctx, offPow);
+    if (!ranked.length) return [];
+    const byK = new Map(ranked.map(t => [t.s.k, t]));
+    const assign = ctx.mem.assign && typeof ctx.mem.assign === 'object' ? ctx.mem.assign : {};
+    const load = new Map(ranked.map(t => [t.s.k, 0]));
+    const members = new Map();
+    const put = (u, t, turn) => {
+      load.set(t.s.k, load.get(t.s.k) + power(u));
+      if (!members.has(t.s.k)) members.set(t.s.k, { t, units: [] });
+      members.get(t.s.k).units.push(u);
+      next[u.id] = { k: t.s.k, turn };
+    };
+    const next = {};
+    // сила, що вже йде на кожну ціль за старими зобов’язаннями
+    const committedPow = new Map();
+    for (const u of strike) { const a = assign[u.id]; if (a && byK.has(a.k)) committedPow.set(a.k, (committedPow.get(a.k) || 0) + power(u)); }
+    const fresh = [];
+    for (const u of strike) {
+      const a = assign[u.id];
+      const t = a && byK.get(a.k);
+      const hopeless = t && t.s.enemyPow > 3 * (committedPow.get(a.k) || 0);
+      if (t && !hopeless && state.time.turn - a.turn < COMMIT_HOURS) put(u, t, a.turn);
+      else fresh.push(u);
+    }
+    // нові призначення: найвигідніша для підрозділу ціль із урахуванням уже спрямованої сили
+    fresh.sort((a, b) => power(b) - power(a) || a.id - b.id);
+    for (const u of fresh) {
+      let best = null, bestScore = -Infinity;
+      for (const t of ranked) {
+        const d = g.dist(u.idx, t.s.s.center);
+        let sc = t.s.value * Math.min(1.5, Math.max(0.2, t.feas)) / (1 + d / 6);
+        if (t.feas < 0.5) sc *= 0.4;
+        if (load.get(t.s.k) >= t.need * 1.5) sc *= 0.15;
+        const prev = assign[u.id];
+        if (prev && prev.k === t.s.k) sc *= 1.5;
+        if (sc > bestScore) { bestScore = sc; best = t; }
+      }
+      const prev = assign[u.id];
+      put(u, best, prev && prev.k === best.s.k ? prev.turn : state.time.turn);
+    }
+    const list = [...members.values()].sort((x, y) => load.get(y.t.s.k) - load.get(x.t.s.k) || x.t.s.k - y.t.s.k);
+    ctx.mem.target = list.length ? list[0].t.s.k : null;
+    ctx.mem.assign = next;
+    return list;
+  }
+
+  // Наближення до противника в пункті k на дальність свого вогню (1–2 гекси), з укриттям
+  function closeIn(ctx, u, enemies, taken) {
+    const { state, g } = ctx;
+    const e = enemies[u.id % Math.min(2, enemies.length)];
+    const range = Math.max(1, Math.floor(Combat.maxRange(u, false, state) / CONFIG.hexMeters));
+    const reach = Math.min(2, range);
+    if (g.dist(u.idx, e.idx) <= reach && !u.order) { hold(ctx, u); return; }
+    if (u.order && g.dist(u.order.target, e.idx) <= reach) return;
+    const r = safe(ctx, 'штурм', () => moveNear(ctx, u, e.idx, 1, reach, { taken, coverW: 1.5, tries: 3 }));
+    if (r === 'here') hold(ctx, u);
+  }
+
+  // Дії групи щодо цілі: прямо до пункту; перед відомим сильнішим противником — зачекати
+  // підходу решти на рубежі; потім — до найслабшого ворога в пункті або в центр.
+  function assault(ctx, tgt, group) {
+    const { state, g, f } = ctx;
+    const s = tgt.s;
+    const stageR = s.radius + 3;
+    const targetEnemies = ctx.enemies.filter(e => g.dist(e.idx, s.s.center) <= s.radius + 1).sort((a, b) => a.pow - b.pow || a.m.id - b.m.id);
+    const known = targetEnemies.reduce((a, e) => a + e.pow, 0);
+    const nearPow = group.filter(u => g.dist(u.idx, s.s.center) <= stageR + 1).reduce((a, u) => a + power(u), 0);
+    const groupPow = group.reduce((a, u) => a + power(u), 0);
+    const wait = known > 0 && nearPow < known * 1.1 && nearPow < groupPow * 0.8;
+    const taken = new Set();
+    for (const u of group) {
+      if (u.mp <= 1e-9 && !u.order) continue;
+      if (Logistics.supplyLevel(u) < 0.3 && !visibleEnemyNear(ctx, u.idx, 2) && safe(ctx, 'поповнення', () => goResupply(ctx, u))) continue;
+      if (safe(ctx, 'посадка', () => rideIfFar(ctx, u, s.s.center))) continue;
+      const dist = g.dist(u.idx, s.s.center);
+      if (wait && dist <= stageR + 1) {
+        if (!u.order) hold(ctx, u);
+        continue;
+      }
+      if (wait || (dist > stageR + 1 && known > 0)) {
+        if (u.order && Math.abs(g.dist(u.order.target, s.s.center) - stageR) <= 1) continue;
+        const r = safe(ctx, 'збір', () => moveNear(ctx, u, s.s.center, stageR - 1, stageR + 1, { taken, safeDist: 2, tries: 3 }));
+        if (r === 'here') hold(ctx, u);
+        continue;
+      }
+      if (targetEnemies.length) { closeIn(ctx, u, targetEnemies, taken); continue; }
+      const centerFree = !Engine.knownForeignHexes(state, f).has(s.s.center) && !taken.has(s.s.center);
+      if (centerFree && !state.units.some(x => x.faction === f && x.idx === s.s.center) && moveTo(ctx, u, s.s.center)) { taken.add(s.s.center); continue; }
+      if (u.order && state.map.settlement[u.order.target] === s.k) continue;
+      const r = safe(ctx, 'зайняття', () => moveNear(ctx, u, s.s.center, 0, s.radius, { preferSettlement: s.k, taken, tries: 3 }));
+      if (r === 'here') hold(ctx, u);
+    }
+  }
+
+  function militaryHard(ctx) {
+    const { state, g, f } = ctx;
+    const units = ctx.own.filter(u => u.embarked == null).sort((a, b) => a.id - b.id);
+    const done = new Set();
+    const mark = u => done.add(u.id);
+
+    // 1. Машини з пасажирами — довезти/висадити
+    for (const v of units) if (Transport.isVehicle(v) && Transport.passengers(state, v).length && Engine.canAct(v)) { safe(ctx, 'транспорт', () => driveVehicle(ctx, v)); mark(v); }
+    // 2. Зламані — відводимо
+    for (const u of units) if (!done.has(u.id) && Engine.canAct(u) && broken(ctx, u)) { if (safe(ctx, 'відступ', () => retreat(ctx, u))) mark(u); }
+    // 3. Вогонь: спершу навісна (м’якшить), потім пряма — зосереджено
+    for (const u of units) if (!done.has(u.id) && role(u) === 'artillery') { if (safe(ctx, 'вогонь', () => fire(ctx, u))) mark(u); }
+    const direct = units.filter(u => !done.has(u.id) && ['infantry', 'support', 'armor', 'recon'].includes(role(u)));
+    for (let pass = 0; pass < 2; pass++) for (const u of direct) if (!done.has(u.id) && (role(u) !== 'recon' || visibleEnemyNear(ctx, u.idx, 1))) { if (safe(ctx, 'вогонь', () => fire(ctx, u))) mark(u); }
+    // 4. Поповнення біля складу
+    for (const u of units) if (!done.has(u.id) && Engine.canAct(u) && safe(ctx, 'поповнення', () => tryResupply(ctx, u))) mark(u);
+
+    const pool = new Set(units.filter(u => !done.has(u.id) && Engine.canAct(u) && ['infantry', 'support', 'armor', 'rear'].includes(role(u))));
+    const mine = ctx.settlements.filter(s => s.mine);
+
+    // 5. Тримачі центрів. Пункт належить тому, хто наприкінці години сам тримає центральний
+    // гекс, — тож у кожному своєму пункті постійно стоїть хтось у центрі (бажано не найсильніший).
+    const holders = ctx.mem.holders && typeof ctx.mem.holders === 'object' ? ctx.mem.holders : {};
+    ctx.mem.holders = {};
+    for (const s of mine) {
+      const c = s.s.center;
+      if (Engine.knownForeignHexes(state, f).has(c)) continue;
+      let h = holders[s.k] != null ? Engine.unitById(state, holders[s.k]) : null;
+      if (h && (h.faction !== f || h.personnel.fit <= 0 || h.embarked != null)) h = null;
+      if (!h) h = units.find(u => u.idx === c && pool.has(u)) || null;
+      if (!h) {
+        const cands = [...pool].filter(u => role(u) !== 'armor' && g.dist(u.idx, c) <= s.radius + 12)
+          .sort((a, b) => (g.dist(a.idx, c) <= s.radius + 3 ? 0 : 1) - (g.dist(b.idx, c) <= s.radius + 3 ? 0 : 1) || power(a) - power(b) || g.dist(a.idx, c) - g.dist(b.idx, c) || a.id - b.id);
+        h = cands[0] || null;
+      }
+      if (!h) continue;
+      ctx.mem.holders[s.k] = h.id;
+      pool.delete(h);
+      if (done.has(h.id) || !Engine.canAct(h)) continue;
+      if (h.idx === c) { if (!h.order) hold(ctx, h); }
+      else if (!(h.order && h.order.target === c)) safe(ctx, 'центр', () => moveTo(ctx, h, c));
+    }
+    for (const u of pool) if (role(u) === 'rear') pool.delete(u);
+
+    // 6. Надзвичайна оборона: противник уже в нашому пункті — найближчі вибивають його
+    const emergency = mine.filter(s => s.enemyPow > 0).sort((a, b) => b.enemyPow - a.enemyPow || a.k - b.k);
+    for (const s of emergency) {
+      const enemies = ctx.enemies.filter(e => g.dist(e.idx, s.s.center) <= s.radius + 1).sort((a, b) => a.pow - b.pow || a.m.id - b.m.id);
+      if (!enemies.length) continue;
+      const need = s.enemyPow * 1.5;
+      let have = 0;
+      const taken = new Set();
+      const cands = [...pool].filter(u => g.dist(u.idx, s.s.center) <= s.radius + 8).sort((a, b) => g.dist(a.idx, s.s.center) - g.dist(b.idx, s.s.center) || a.id - b.id);
+      for (const u of cands) {
+        if (have >= need) break;
+        pool.delete(u); have += power(u);
+        if (!Engine.canAct(u) || (u.mp <= 1e-9 && !u.order)) continue;
+        closeIn(ctx, u, enemies, taken);
+      }
+    }
+
+    // 7. Наступ
+    const strike = [...pool];
+    const groups = planGroups(ctx, strike);
+    const tgt = groups.length ? groups[0].t : null;
+    for (const gr of groups) assault(ctx, gr.t, gr.units);
+    if (!groups.length) for (const u of strike) if (!u.order) hold(ctx, u);
+
+    // 8. Решта ролей
+    const front = tgt ? tgt.s.s.center : null;
+    for (const u of units) {
+      if (done.has(u.id) || !Engine.canAct(u)) continue;
+      const r = role(u);
+      if (r === 'recon') {
+        if (front == null) { hold(ctx, u, 'observe'); continue; }
+        const d = g.dist(u.idx, front);
+        if (!u.order && d >= 3 && d <= 5 && nearestEnemyDist(ctx, u.idx) >= 2) { hold(ctx, u, 'observe'); continue; }
+        if (u.order) continue;
+        const res = safe(ctx, 'розвідка', () => moveNear(ctx, u, front, 3, 5, { safeDist: 2, tries: 2 }));
+        if (res === 'here') hold(ctx, u, 'observe');
+      } else if (r === 'artillery') {
+        // навісна — підтягнути, щоб ціль була в межах дальності, але не ближче 3 гексів до ворога
+        if (front == null || u.type === 'arty_team' || u.order) continue;
+        const range = Math.floor(Combat.maxRange(u, true, state) / CONFIG.hexMeters);
+        const d = g.dist(u.idx, front);
+        if (d <= range - 1) continue;
+        safe(ctx, 'артилерія', () => moveNear(ctx, u, front, Math.max(3, range - 3), range - 1, { safeDist: 3, tries: 2 }));
+      } else if (r === 'ew') {
+        hold(ctx, u, 'observe');
+      } else if (r === 'rear') {
+        if (u.order) continue;
+        const here = inSettlement(ctx, u.idx);
+        if (here && here.friendly && here.enemyPow < 1) { hold(ctx, u); continue; }
+        const home = ctx.settlements.filter(x => x.friendly && x.enemyPow < 1).sort((a, b) => g.dist(u.idx, a.s.center) - g.dist(u.idx, b.s.center))[0];
+        if (home) safe(ctx, 'тил', () => moveNear(ctx, u, home.s.center, 0, home.radius, { preferSettlement: home.k, tries: 2 }));
+      } else if (r === 'transport') {
+        if (u.order) continue;
+        const here = inSettlement(ctx, u.idx);
+        if (here && here.friendly && here.enemyPow < 1) continue;
+        const home = ctx.settlements.filter(x => x.friendly && x.enemyPow < 1).sort((a, b) => g.dist(u.idx, a.s.center) - g.dist(u.idx, b.s.center))[0];
+        if (home) safe(ctx, 'автопарк', () => moveNear(ctx, u, home.s.center, 0, home.radius, { preferSettlement: home.k, tries: 2 }));
+      }
+    }
+  }
+
+  // ------------------------------------------------------------ фаза бота
+  // Виконати всі дії бота для фракції поточної фази. Фазу НЕ завершує — це робить той,
+  // хто викликає (інтерфейс або тест), через Engine.endPhase.
+  function runPhase(state) {
+    const f = Engine.phaseFaction(state);
+    if (f == null || !isBot(state, f)) return { ok: false, reason: 'Зараз фаза не бота.' };
+    if (state.campaign && state.campaign.over) return { ok: false, reason: 'Кампанію завершено.' };
+    const level = controller(state, f);
+    const ctx = buildCtx(state, f, level);
+    safe(ctx, 'дипломатія', () => diplomacy(ctx));
+    if (level === 'hard') safe(ctx, 'економіка', () => economy(ctx));
+    safe(ctx, 'бій', () => level === 'hard' ? militaryHard(ctx) : militaryEasy(ctx));
+    // прибрати задачі зниклих машин
+    for (const id of Object.keys(ctx.mem.tasks)) if (!Engine.unitById(state, Number(id))) delete ctx.mem.tasks[id];
+    return { ok: true, faction: f, level, stats: ctx.stats };
+  }
+
+  return { LEVELS, CONTROLLER_NAMES, configure, controller, isBot, humans, runPhase, role, power };
+})();
+
 // ---- 90_ui.js
 // ============================================================================
 // МОДУЛЬ: ІНТЕРФЕЙС — РЕНДЕРИНГ КАРТИ, ПАНЕЛІ, ВВЕДЕННЯ
 // Інтерфейс лише читає стан і викликає Engine / Combat / Intel / SaveSystem.
-// Показує тільки те, що знає фракція поточної фази (туман війни).
+// Показує тільки те, що знає фракція-«глядач» (туман війни): у грі кількох людей — фракція
+// поточної фази; коли людина одна — завжди її фракція (боти ходять, а вона бачить своє);
+// коли грають лише боти — фракція, обрана в панелі глядача.
 // ============================================================================
 const UI = (() => {
   let state = null;
@@ -7564,6 +8267,9 @@ const UI = (() => {
   let report = null;                 // звіт бою для показу
   let leftTab = 'own';               // own | intel
   let handover = true;               // екран передачі ходу
+  let viewFaction = null;            // чиїми очима показуємо карту (null — фракція поточної фази)
+  let botBusy = false, botTimer = null;
+  const spectator = { paused: false, delay: 700, view: 0 };   // режим «лише боти»
   let canvas, ctx, cw = 0, ch = 0, dpr = 1, dirty = true;
   const $ = id => document.getElementById(id);
   const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -7571,7 +8277,82 @@ const UI = (() => {
   let FC = CONFIG.factions.map(f => f.color);
   const MAPFC = CONFIG.factions.map(f => f.color);   // кольори на паперовій карті
   const ABBR = ['СВ', 'ДП', 'НП'];
-  const pf = () => Engine.phaseFaction(state);
+  const pf = () => viewFaction != null ? viewFaction : Engine.phaseFaction(state);
+
+  // ------------------------------------------------------- гравці й боти
+  // hotseat — кілька людей (екран передачі ходу); solo — одна людина проти ботів;
+  // spectate — усі фракції під ботами, людина спостерігає.
+  function playMode() {
+    const n = AI.humans(state).length;
+    return n === 0 ? 'spectate' : n === 1 ? 'solo' : 'hotseat';
+  }
+  // Чи може людина зараз віддавати накази (її фаза, не хід бота, не глядач)
+  function commandable() {
+    if (!state || botBusy || handover) return false;
+    const f = Engine.phaseFaction(state);
+    return f != null && !AI.isBot(state, f) && f === pf();
+  }
+  function applyViewer() {
+    const m = playMode();
+    viewFaction = m === 'solo' ? AI.humans(state)[0] : m === 'spectate' ? spectator.view : null;
+  }
+  // Після будь-якої зміни фази: або запускаємо бота, або передаємо хід людині
+  function afterPhaseChange() {
+    applyViewer();
+    const f = Engine.phaseFaction(state);
+    const m = playMode();
+    clearTimeout(botTimer);
+    if (state.campaign && state.campaign.over) {
+      botBusy = false; handover = m === 'hotseat';
+    } else if (AI.isBot(state, f)) {
+      botBusy = true; handover = m === 'hotseat';
+      if (!(m === 'spectate' && spectator.paused)) botTimer = setTimeout(runBotPhase, m === 'spectate' ? spectator.delay : 60);
+    } else {
+      botBusy = false;
+      // одна людина: звіт «поки вас не було» — лише якщо є тривоги; кілька — завжди передача ходу
+      handover = m === 'hotseat' || newAlerts(f).length > 0;
+    }
+    renderAll();
+  }
+  function runBotPhase() {
+    botTimer = null;
+    if (!state || state.campaign.over || !AI.isBot(state, Engine.phaseFaction(state))) { afterPhaseChange(); return; }
+    let r;
+    try { r = AI.runPhase(state); } catch (e) { console.error('ШІ:', e); }
+    const e = Engine.endPhase(state);
+    if (e.ok && e.hourEnded) {
+      const sv = SaveSystem.saveToSlot('auto', state);
+      if (!sv.ok && playMode() !== 'spectate') toast('Автозбереження не вдалося: ' + sv.reason, true);
+    }
+    if (!e.ok) { botBusy = false; toast(e.reason, true); renderAll(); return; }
+    if (selectedId != null && !Engine.unitById(state, selectedId)) resetSelection();
+    if (playMode() !== 'spectate') { mode = null; preview = null; }
+    void r;
+    afterPhaseChange();
+  }
+  function renderBotbar() {
+    const el = $('botbar');
+    if (!state) { el.hidden = true; return; }
+    const m = playMode();
+    const f = Engine.phaseFaction(state);
+    const parts = [];
+    if (m === 'spectate') {
+      parts.push(`<span class="who">Лише боти${state.campaign.over ? ' · кампанію завершено' : ''}</span>`);
+      parts.push(`<button type="button" id="spPause" ${state.campaign.over ? 'disabled' : ''}>${spectator.paused ? '▶ Продовжити' : '⏸ Пауза'}</button>`);
+      parts.push(`<button type="button" id="spStep" ${spectator.paused && !state.campaign.over ? '' : 'disabled'}>Крок</button>`);
+      parts.push(`<label>Темп <select id="spSpeed">${[[1500, 'повільно'], [700, 'звичайно'], [150, 'швидко']].map(([v, n]) => `<option value="${v}"${spectator.delay === v ? ' selected' : ''}>${n}</option>`).join('')}</select></label>`);
+      parts.push(`<label>Погляд <select id="spView">${[0, 1, 2].map(k => `<option value="${k}"${spectator.view === k ? ' selected' : ''}>${esc(CONFIG.factions[k].short)}</option>`).join('')}</select></label>`);
+    } else if (botBusy && f != null) {
+      parts.push(`<span class="who"><span class="dot" style="background:${FC[f]}"></span>Ходить бот: ${esc(CONFIG.factions[f].short)} (${esc(AI.CONTROLLER_NAMES[AI.controller(state, f)].replace('Бот ', '').replace(/[()]/g, ''))})…</span>`);
+    }
+    el.hidden = !parts.length;
+    el.innerHTML = parts.join('');
+    if (m !== 'spectate') return;
+    $('spPause').onclick = () => { spectator.paused = !spectator.paused; afterPhaseChange(); };
+    $('spStep').onclick = () => { if (spectator.paused && AI.isBot(state, Engine.phaseFaction(state))) runBotPhase(); };
+    $('spSpeed').onchange = e => { spectator.delay = Number(e.target.value); };
+    $('spView').onchange = e => { spectator.view = Number(e.target.value); applyViewer(); resetSelection(); invalidateBase(); renderAll(); };
+  }
 
   // ------------------------------------------------------------ ініціалізація
   function init() {
@@ -7593,13 +8374,16 @@ const UI = (() => {
     selectedId = null; selectedHex = -1; selectedEnemy = null; mode = null; preview = null; report = null;
   }
 
-  function setState(s, opts = {}) {
+  function setState(s) {
+    clearTimeout(botTimer); botTimer = null; botBusy = false;
     state = s;
+    if (!state.players) AI.configure(state, ['human', 'human', 'human']);   // старі збереження — гра людей
     resetSelection();
     leftTab = 'own';
+    applyViewer();
     focusFaction();
-    handover = opts.handover !== false;
-    renderAll();
+    closeMainMenu();
+    afterPhaseChange();
   }
 
   function focusFaction() {
@@ -8254,7 +9038,7 @@ const UI = (() => {
     zoneCache = null;
     invalidateBase();
     if (!handover) Logistics.refreshSupply(state, pf());
-    renderHandover(); renderTop(); renderLeft(); renderRight(); renderLog(); renderHexInfo(); renderHint(); redraw();
+    renderHandover(); renderTop(); renderBotbar(); renderLeft(); renderRight(); renderLog(); renderHexInfo(); renderHint(); redraw();
     window.__state = state;
   }
 
@@ -8276,16 +9060,26 @@ const UI = (() => {
   function renderHandover() {
     const el = $('handover');
     if (!handover) { el.hidden = true; return; }
-    const f = pf();
+    const f = Engine.phaseFaction(state);
     el.hidden = false;
+    // хід бота в грі кількох людей — карту приховано, бот ходить сам
+    if (AI.isBot(state, f) && !(state.campaign && state.campaign.over)) {
+      el.innerHTML = `<div class="ho-card" style="border-top-color:${FC[f]}">
+        <div class="ho-time">${esc(Engine.timeLabel(state.time))}${Engine.isNight(state.time.hour) ? ' · ніч' : ''}</div>
+        <h2>${esc(CONFIG.factions[f].name)}</h2>
+        <p>Ходить ${esc(AI.CONTROLLER_NAMES[AI.controller(state, f)].toLowerCase())}…</p>
+      </div>`;
+      return;
+    }
+    const solo = playMode() === 'solo';
     el.innerHTML = `<div class="ho-card" style="border-top-color:${FC[f]}">
       <div class="ho-time">${esc(Engine.timeLabel(state.time))}${Engine.isNight(state.time.hour) ? ' · ніч' : ''} · фаза ${f + 1} з 3</div>
-      <h2>${esc(CONFIG.factions[f].name)}</h2>
-      <p>Передайте керування гравцю цієї фракції. Карта прихована, щоб інші сторони не бачили його розвідданих.</p>
+      <h2>${solo ? 'Ваш хід' : esc(CONFIG.factions[f].name)}</h2>
+      <p>${solo ? `${esc(CONFIG.factions[f].name)}. Боти зробили свої ходи — нижче те, що ви помітили за цей час.` : 'Передайте керування гравцю цієї фракції. Карта прихована, щоб інші сторони не бачили його розвідданих.'}</p>
       ${Politics.incoming(state, f).length ? `<p><b>Дипломатичні пропозиції: ${Politics.incoming(state, f).length}</b> — див. «Політика».</p>` : ''}
       ${state.campaign && state.campaign.over ? `<p><b>Кампанію завершено.</b> ${esc(state.campaign.reason)}</p>` : ''}
       ${alertsHtml(f)}
-      <button type="button" class="primary" id="btnBeginPhase">Розпочати фазу</button>
+      <button type="button" class="primary" id="btnBeginPhase">${solo ? 'До справ' : 'Розпочати фазу'}</button>
     </div>`;
     const begin = () => {
       const fresh = newAlerts(f);
@@ -8313,7 +9107,8 @@ const UI = (() => {
       return `<span title="${esc(name)}" class="phase-chip${active ? ' active' : ''}" style="background:${bg}">${i + 1}. ${esc(abbr)}</span>`;
     }).join('');
     $('btnEndPhase').textContent = state.campaign && state.campaign.over ? 'Кампанію завершено' : p === 2 ? 'Завершити годину ▸' : 'Завершити фазу ▸';
-    $('btnEndPhase').disabled = handover || !!(state.campaign && state.campaign.over);
+    $('btnEndPhase').disabled = !commandable() || !!(state.campaign && state.campaign.over);
+    if (playMode() === 'spectate') $('btnEndPhase').textContent = 'Хід ботів';
     const inc = handover ? 0 : Politics.incoming(state, pf()).length;
     $('btnPol').innerHTML = 'Політика' + (inc ? `<span class="badge">${inc}</span>` : '');
   }
@@ -8629,7 +9424,7 @@ const UI = (() => {
     const g = Engine.grid(state);
     const ut = CONFIG.unitTypes[u.type];
     const p = u.personnel;
-    const mine = pf() === u.faction;
+    const mine = pf() === u.faction && commandable();
     const wl = Object.entries(u.weapons).map(([k, n]) => `<li><span>${esc(k)}${CONFIG.weapons[k] ? ` <small class="muted">${CONFIG.weapons[k].range} м</small>` : ''}</span><span>${n}</span></li>`).join('') || '<li><span>немає</span><span></span></li>';
     const al = Object.entries(u.ammo).map(([k, n]) => `<li><span>${esc(CONFIG.ammo[k] ? CONFIG.ammo[k].name : k)}</span><span${n === 0 ? ' class="bad"' : ''}>${n}</span></li>`).join('') || '<li><span>немає</span><span></span></li>';
     const st = unitStatus(u);
@@ -8694,7 +9489,7 @@ const UI = (() => {
   function cargoHtml(u) {
     const c = u.cargo || { weapons: {}, ammo: {}, goods: {} };
     const w = Object.entries(c.weapons).filter(([, n]) => n > 0), a = Object.entries(c.ammo).filter(([, n]) => n > 0), gd = Object.entries(c.goods || {}).filter(([, n]) => n > 0);
-    const mine = u.faction === pf();
+    const mine = u.faction === pf() && commandable();
     const canKg = Logistics.cargoCapKg(u) > 0;
     const head = canKg ? `Вантаж · ${Math.round(Logistics.cargoKg(u))}/${Logistics.cargoCapKg(u)} кг` : `Трофеї у вантажі · ${Loot.count(c.weapons)}/${Loot.cargoCap(u)}`;
     let btns = '';
@@ -8723,7 +9518,7 @@ const UI = (() => {
     const now = Intel.hexObserved(state, f, i);
     return list.map(fa => {
       const def = CONFIG.facilities[fa.type];
-      const mine = fa.owner === f;
+      const mine = fa.owner === f && commandable();
       const visible = mine || now;
       const st = fa.stock;
       const ammo = Object.entries(st.ammo).filter(([, n]) => n > 0).map(([k, n]) => `<li><span>${esc(CONFIG.ammo[k].name)}</span><span>${n}</span></li>`).join('');
@@ -9103,7 +9898,7 @@ const UI = (() => {
   }
 
   function endPhase() {
-    if (handover) return;
+    if (!commandable()) return;
     mode = null; preview = null;
     const r = Engine.endPhase(state);
     if (!r.ok) { toast(r.reason, true); return; }
@@ -9113,12 +9908,13 @@ const UI = (() => {
     }
     resetSelection();
     leftTab = 'own';
-    handover = true;
-    renderAll();
+    afterPhaseChange();
   }
 
   function onHexClick(i, button) {
     if (i < 0 || handover) return;
+    // не свій хід (ходить бот / глядач) — лише огляд карти, без наказів
+    if (!commandable()) { mode = null; preview = null; if (button === 2) return; }
     const sel = selectedId != null ? Engine.unitById(state, selectedId) : null;
     const f = pf();
     const enemiesHere = Engine.unitsAt(state, i).filter(u => u.faction !== f && !Politics.allied(state, f, u.faction) && Intel.isVisible(state, f, u.id));
@@ -9207,10 +10003,11 @@ const UI = (() => {
     canvas.addEventListener('wheel', e => { e.preventDefault(); zoomAt(e.deltaY < 0 ? 1.15 : 1 / 1.15, e.offsetX, e.offsetY); }, { passive: false });
     window.addEventListener('keydown', e => {
       if (!state || $('modalRoot').firstChild) { if (e.key === 'Escape') closeModal(); return; }
+      if (!$('mainmenu').hidden) { if (e.key === 'Escape') closeMainMenu(); return; }
       if (e.target && /INPUT|TEXTAREA/.test(e.target.tagName)) return;
       if (handover) return;
       if (e.key === 'Escape') { mode = null; preview = null; renderAll(); }
-      else if (e.key === 'Enter' && preview && preview.ok) { e.preventDefault(); preview.path ? confirmMove() : confirmAttack(); }
+      else if (e.key === 'Enter' && preview && preview.ok && commandable()) { e.preventDefault(); preview.path ? confirmMove() : confirmAttack(); }
       else if (e.key === '+' || e.key === '=') zoomAt(1.2);
       else if (e.key === '-') zoomAt(1 / 1.2);
     });
@@ -9234,7 +10031,7 @@ const UI = (() => {
     $('logAlerts').onchange = renderLog;
     $('logbody').addEventListener('click', e => { const b = e.target.closest('[data-log]'); if (b) jumpToLog(Number(b.dataset.log)); });
     $('btnSaves').onclick = openSaves;
-    $('btnNew').onclick = openNewGame;
+    $('btnNew').onclick = () => openMainMenu();
     $('btnHelp').onclick = openHelp;
     document.addEventListener('change', e => {
       const el = e.target.closest('[data-formsel]');
@@ -9342,7 +10139,7 @@ const UI = (() => {
   function loadState(res, source) {
     if (!res.ok) return res;
     try {
-      setState(res.state, { handover: true });
+      setState(res.state);
       (res.notes || []).forEach(n => toast(n));
       toast(`Завантажено: ${source}, ${Engine.timeLabel(state.time)}.`);
     } catch (e) {
@@ -9361,13 +10158,13 @@ const UI = (() => {
         <div style="display:flex;flex-direction:column;gap:6px">
         ${slots.map(s => `<div class="slot"><div><strong>${esc(s.name)}</strong><div class="meta">${s.empty ? 'порожньо' : `${esc(Engine.timeLabel(s))} · фаза ${s.phase + 1} · збережено ${fmtDate(s.savedAt)} · ${Math.round(s.bytes / 1024)} КБ`}</div></div>
           <div class="btns">
-            ${s.key !== 'auto' ? `<button type="button" data-save="${s.key}" ${avail ? '' : 'disabled'}>Зберегти сюди</button>` : ''}
+            ${s.key !== 'auto' ? `<button type="button" data-save="${s.key}" ${avail && state ? '' : 'disabled'}>Зберегти сюди</button>` : ''}
             <button type="button" data-load="${s.key}" ${s.empty ? 'disabled' : ''}>Завантажити</button>
             ${s.empty ? '' : `<button type="button" data-del="${s.key}">Видалити</button>`}
           </div></div>`).join('')}
         </div>
         <div><h3 style="margin:0 0 6px;font-size:13px">Експорт у файл</h3>
-          <div class="row"><button type="button" id="btnExport">Завантажити файл .json</button><button type="button" id="btnCopy">Скопіювати текст збереження</button></div>
+          <div class="row"><button type="button" id="btnExport" ${state ? '' : 'disabled'}>Завантажити файл .json</button><button type="button" id="btnCopy" ${state ? '' : 'disabled'}>Скопіювати текст збереження</button></div>
           <p class="notice">Якщо браузер блокує завантаження, скопіюйте текст і збережіть його у файл вручну.</p>
           <textarea id="exportText" readonly hidden></textarea>
         </div>
@@ -9427,17 +10224,64 @@ const UI = (() => {
     draw();
   }
 
-  function openNewGame() {
-    openModal('Нова кампанія', `
-      <p class="notice" style="font-size:13px">Тестовий сценарій: фрагмент області ${CONFIG.map.width}×${CONFIG.map.height} гексів (${CONFIG.map.width * 0.25}×${CONFIG.map.height * 0.25 * 0.87 | 0} км), три фракції в режимі «гаряче місце» з екраном передачі ходу. Поточна кампанія буде замінена; збережіть її, якщо потрібно.</p>
-      <div class="row"><label for="seedInput">Номер карти (seed)</label><input type="number" id="seedInput" value="1999" min="1" max="999999"></div>
-      <div class="row"><button type="button" class="primary" id="btnStart">Почати кампанію</button></div>`, () => {
-      $('btnStart').onclick = () => {
-        const seed = Math.max(1, Math.min(999999, parseInt($('seedInput').value, 10) || 1999));
-        setState(Engine.newGame(seed));
-        closeModal();
-      };
-    });
+  // ---------------------------------------------------------- головне меню
+  // Новий бій: хто керує кожною фракцією (людина / бот легкий / бот важкий) і номер карти.
+  const menuSel = ['human', 'easy', 'easy'];
+  function openMainMenu() {
+    const el = $('mainmenu');
+    const inGame = !!state;
+    const auto = SaveSystem.listSlots().find(x => x.key === 'auto');
+    const canContinue = !inGame && auto && !auto.empty;
+    const opt = (k, v, n) => `<option value="${v}"${menuSel[k] === v ? ' selected' : ''}>${n}</option>`;
+    el.hidden = false;
+    el.innerHTML = `<div class="mm-card" role="dialog" aria-modal="true" aria-labelledby="mmTitle">
+      <h1 id="mmTitle">Юготарія<small>Громадянська війна</small></h1>
+      <div class="mm-actions">
+        ${inGame ? '<button type="button" id="mmResume">Повернутися до гри</button>' : ''}
+        ${canContinue ? `<button type="button" id="mmContinue">Продовжити · ${esc(Engine.timeLabel(auto))}</button>` : ''}
+        <button type="button" id="mmLoad">Завантажити збереження</button>
+        <button type="button" id="mmHelp">Довідка</button>
+      </div>
+      <section class="mm-new">
+        <h2>Нова кампанія</h2>
+        <p class="notice">Оберіть, хто керує кожною стороною. Боти бачать лише те, що бачить їхня розвідка. Якщо людей кілька — гра «гаряче місце» з екраном передачі ходу; якщо жодної — ви спостерігаєте за ботами.</p>
+        <div class="mm-sides">
+          ${[0, 1, 2].map(k => `<label class="mm-side"><span class="dot" style="background:${FC[k]}"></span><span class="nm">${esc(CONFIG.factions[k].name)}</span>
+            <select data-side="${k}" aria-label="Хто керує: ${esc(CONFIG.factions[k].name)}">${opt(k, 'human', 'Людина')}${opt(k, 'easy', 'Бот — легкий')}${opt(k, 'hard', 'Бот — важкий')}</select></label>`).join('')}
+        </div>
+        <div class="row"><label for="seedInput">Номер карти</label><input type="number" id="seedInput" value="1999" min="1" max="999999">
+          <span class="notice">Однаковий номер — однакова карта.</span></div>
+        ${inGame ? '<p class="notice warn">Поточна кампанія буде замінена — збережіть її, якщо потрібно.</p>' : ''}
+        <div class="row"><button type="button" class="primary" id="btnStart">Почати кампанію</button><span class="notice" id="mmSummary"></span></div>
+      </section>
+    </div>`;
+    const summary = () => {
+      const h = menuSel.filter(x => x === 'human').length;
+      $('mmSummary').textContent = h === 0 ? 'Режим глядача: усі сторони — боти.' : h === 1 ? 'Одна людина проти ботів.' : `Гаряче місце: ${h} гравці${menuSel.some(x => x !== 'human') ? ' і боти' : ''}.`;
+    };
+    el.querySelectorAll('[data-side]').forEach(sel => sel.onchange = () => { menuSel[Number(sel.dataset.side)] = sel.value; summary(); });
+    summary();
+    $('btnStart').onclick = () => {
+      const seed = Math.max(1, Math.min(999999, parseInt($('seedInput').value, 10) || 1999));
+      const s = Engine.newGame(seed);
+      AI.configure(s, menuSel.slice());
+      spectator.paused = false;
+      setState(s);
+    };
+    if ($('mmResume')) $('mmResume').onclick = closeMainMenu;
+    if ($('mmContinue')) $('mmContinue').onclick = () => {
+      const r = loadState(SaveSystem.loadFromSlot('auto'), 'автозбереження');
+      if (!r.ok) toast(r.errors.join(' '), true);
+    };
+    $('mmLoad').onclick = openSaves;
+    $('mmHelp').onclick = openHelp;
+    setTimeout(() => { const b = $('btnStart'); if (b && !inGame) b.focus(); }, 0);
+  }
+  function closeMainMenu() {
+    const el = $('mainmenu');
+    if (!el || el.hidden) return;
+    if (!state) return;   // без гри меню не закривається
+    el.hidden = true; el.innerHTML = '';
   }
 
   let polTab = 'pop';
@@ -9621,6 +10465,13 @@ const UI = (() => {
     const weapons = Object.entries(CONFIG.weapons).map(([n, w]) => `<tr><td>${esc(n)}</td><td class="n">${w.range}</td><td class="n">${w.accuracy}</td><td class="n">${w.fp}</td><td class="n">${w.at}</td><td class="n">${w.ammoPerHour}</td><td>${esc(w.spec)}</td></tr>`).join('');
     const C = CONFIG.combat, Dt = CONFIG.detection;
     openModal('Довідка та параметри', `
+      <div><h3 style="margin:0 0 6px;font-size:13px">Боти</h3><ul>
+        <li>У меню (кнопка «Меню») для кожної фракції обирається, хто нею керує: людина, легкий або важкий бот.</li>
+        <li><b>Легкий</b> іде до найближчого чужого пункту й стріляє в першого видимого ворога, не зважаючи на співвідношення сил.</li>
+        <li><b>Важкий</b> тримає центри своїх пунктів, вибиває ворога зі своїх пунктів, розподіляє ударні сили між цілями й не кидає їх туди-сюди, зосереджує вогонь, відводить зламані підрозділи, поповнює боєприпаси, підвозить піхоту машинами, формує нові підрозділи й відповідає на дипломатичні пропозиції.</li>
+        <li>Обидва чесні: бачать лише те, що бачить їхня розвідка, і віддають ті самі накази, що й гравець.</li>
+        <li>Одна людина проти ботів — боти ходять одразу, а картка «Ваш хід» показує, що ви помітили за цей час. Без людей — режим глядача з паузою, кроком, темпом і вибором, чиїми очима дивитися.</li>
+      </ul></div>
       <div><h3 style="margin:0 0 6px;font-size:13px">Як грати</h3><ol>
         <li>Фази: Соціалістична влада → Демократичні повстанці → Націоналістичні повстанці → завершення години. Між фазами карта ховається — передайте пристрій наступному гравцю.</li>
         <li>Кожна фракція бачить лише свої підрозділи, противника в полі зору та застарілі позначки «?» з віком даних.</li>
@@ -9671,7 +10522,7 @@ const UI = (() => {
         <thead><tr><th>Підрозділ</th><th>Осіб</th><th>Пересування</th><th>ОР/год</th></tr></thead><tbody>${units}</tbody></table></div></div>`);
   }
 
-  return { init, setState, getState: () => state, toast, renderAll, __test: { hexClick: (i, b = 0) => onHexClick(i, b), select: id => selectUnit(id, true) } };
+  return { init, setState, openMainMenu, getState: () => state, toast, renderAll, __test: { hexClick: (i, b = 0) => onHexClick(i, b), select: id => selectUnit(id, true) } };
 })();
 
 // ------------------------------------------------------------------ запуск
@@ -9683,7 +10534,10 @@ const UI = (() => {
       const r = SaveSystem.deserialize(data.save);
       if (r.ok) st = r.state;
     }
-    UI.setState(st || Engine.newGame(1999), { handover: true });
+    // #quickstart — одразу гра трьох людей (для UI-тестів і швидкої перевірки), інакше — меню
+    if (st) UI.setState(st);
+    else if (location.hash === '#quickstart') UI.setState(Engine.newGame(1999));
+    else UI.openMainMenu();
   };
   const hot = window.claude && window.claude.hot;
   if (hot && hot.snapshot) hot.snapshot(() => ({ save: UI.getState() ? SaveSystem.serialize(UI.getState()) : null }));

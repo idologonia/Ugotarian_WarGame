@@ -1,7 +1,9 @@
 // ============================================================================
 // МОДУЛЬ: ІНТЕРФЕЙС — РЕНДЕРИНГ КАРТИ, ПАНЕЛІ, ВВЕДЕННЯ
 // Інтерфейс лише читає стан і викликає Engine / Combat / Intel / SaveSystem.
-// Показує тільки те, що знає фракція поточної фази (туман війни).
+// Показує тільки те, що знає фракція-«глядач» (туман війни): у грі кількох людей — фракція
+// поточної фази; коли людина одна — завжди її фракція (боти ходять, а вона бачить своє);
+// коли грають лише боти — фракція, обрана в панелі глядача.
 // ============================================================================
 const UI = (() => {
   let state = null;
@@ -14,6 +16,9 @@ const UI = (() => {
   let report = null;                 // звіт бою для показу
   let leftTab = 'own';               // own | intel
   let handover = true;               // екран передачі ходу
+  let viewFaction = null;            // чиїми очима показуємо карту (null — фракція поточної фази)
+  let botBusy = false, botTimer = null;
+  const spectator = { paused: false, delay: 700, view: 0 };   // режим «лише боти»
   let canvas, ctx, cw = 0, ch = 0, dpr = 1, dirty = true;
   const $ = id => document.getElementById(id);
   const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -21,7 +26,82 @@ const UI = (() => {
   let FC = CONFIG.factions.map(f => f.color);
   const MAPFC = CONFIG.factions.map(f => f.color);   // кольори на паперовій карті
   const ABBR = ['СВ', 'ДП', 'НП'];
-  const pf = () => Engine.phaseFaction(state);
+  const pf = () => viewFaction != null ? viewFaction : Engine.phaseFaction(state);
+
+  // ------------------------------------------------------- гравці й боти
+  // hotseat — кілька людей (екран передачі ходу); solo — одна людина проти ботів;
+  // spectate — усі фракції під ботами, людина спостерігає.
+  function playMode() {
+    const n = AI.humans(state).length;
+    return n === 0 ? 'spectate' : n === 1 ? 'solo' : 'hotseat';
+  }
+  // Чи може людина зараз віддавати накази (її фаза, не хід бота, не глядач)
+  function commandable() {
+    if (!state || botBusy || handover) return false;
+    const f = Engine.phaseFaction(state);
+    return f != null && !AI.isBot(state, f) && f === pf();
+  }
+  function applyViewer() {
+    const m = playMode();
+    viewFaction = m === 'solo' ? AI.humans(state)[0] : m === 'spectate' ? spectator.view : null;
+  }
+  // Після будь-якої зміни фази: або запускаємо бота, або передаємо хід людині
+  function afterPhaseChange() {
+    applyViewer();
+    const f = Engine.phaseFaction(state);
+    const m = playMode();
+    clearTimeout(botTimer);
+    if (state.campaign && state.campaign.over) {
+      botBusy = false; handover = m === 'hotseat';
+    } else if (AI.isBot(state, f)) {
+      botBusy = true; handover = m === 'hotseat';
+      if (!(m === 'spectate' && spectator.paused)) botTimer = setTimeout(runBotPhase, m === 'spectate' ? spectator.delay : 60);
+    } else {
+      botBusy = false;
+      // одна людина: звіт «поки вас не було» — лише якщо є тривоги; кілька — завжди передача ходу
+      handover = m === 'hotseat' || newAlerts(f).length > 0;
+    }
+    renderAll();
+  }
+  function runBotPhase() {
+    botTimer = null;
+    if (!state || state.campaign.over || !AI.isBot(state, Engine.phaseFaction(state))) { afterPhaseChange(); return; }
+    let r;
+    try { r = AI.runPhase(state); } catch (e) { console.error('ШІ:', e); }
+    const e = Engine.endPhase(state);
+    if (e.ok && e.hourEnded) {
+      const sv = SaveSystem.saveToSlot('auto', state);
+      if (!sv.ok && playMode() !== 'spectate') toast('Автозбереження не вдалося: ' + sv.reason, true);
+    }
+    if (!e.ok) { botBusy = false; toast(e.reason, true); renderAll(); return; }
+    if (selectedId != null && !Engine.unitById(state, selectedId)) resetSelection();
+    if (playMode() !== 'spectate') { mode = null; preview = null; }
+    void r;
+    afterPhaseChange();
+  }
+  function renderBotbar() {
+    const el = $('botbar');
+    if (!state) { el.hidden = true; return; }
+    const m = playMode();
+    const f = Engine.phaseFaction(state);
+    const parts = [];
+    if (m === 'spectate') {
+      parts.push(`<span class="who">Лише боти${state.campaign.over ? ' · кампанію завершено' : ''}</span>`);
+      parts.push(`<button type="button" id="spPause" ${state.campaign.over ? 'disabled' : ''}>${spectator.paused ? '▶ Продовжити' : '⏸ Пауза'}</button>`);
+      parts.push(`<button type="button" id="spStep" ${spectator.paused && !state.campaign.over ? '' : 'disabled'}>Крок</button>`);
+      parts.push(`<label>Темп <select id="spSpeed">${[[1500, 'повільно'], [700, 'звичайно'], [150, 'швидко']].map(([v, n]) => `<option value="${v}"${spectator.delay === v ? ' selected' : ''}>${n}</option>`).join('')}</select></label>`);
+      parts.push(`<label>Погляд <select id="spView">${[0, 1, 2].map(k => `<option value="${k}"${spectator.view === k ? ' selected' : ''}>${esc(CONFIG.factions[k].short)}</option>`).join('')}</select></label>`);
+    } else if (botBusy && f != null) {
+      parts.push(`<span class="who"><span class="dot" style="background:${FC[f]}"></span>Ходить бот: ${esc(CONFIG.factions[f].short)} (${esc(AI.CONTROLLER_NAMES[AI.controller(state, f)].replace('Бот ', '').replace(/[()]/g, ''))})…</span>`);
+    }
+    el.hidden = !parts.length;
+    el.innerHTML = parts.join('');
+    if (m !== 'spectate') return;
+    $('spPause').onclick = () => { spectator.paused = !spectator.paused; afterPhaseChange(); };
+    $('spStep').onclick = () => { if (spectator.paused && AI.isBot(state, Engine.phaseFaction(state))) runBotPhase(); };
+    $('spSpeed').onchange = e => { spectator.delay = Number(e.target.value); };
+    $('spView').onchange = e => { spectator.view = Number(e.target.value); applyViewer(); resetSelection(); invalidateBase(); renderAll(); };
+  }
 
   // ------------------------------------------------------------ ініціалізація
   function init() {
@@ -43,13 +123,16 @@ const UI = (() => {
     selectedId = null; selectedHex = -1; selectedEnemy = null; mode = null; preview = null; report = null;
   }
 
-  function setState(s, opts = {}) {
+  function setState(s) {
+    clearTimeout(botTimer); botTimer = null; botBusy = false;
     state = s;
+    if (!state.players) AI.configure(state, ['human', 'human', 'human']);   // старі збереження — гра людей
     resetSelection();
     leftTab = 'own';
+    applyViewer();
     focusFaction();
-    handover = opts.handover !== false;
-    renderAll();
+    closeMainMenu();
+    afterPhaseChange();
   }
 
   function focusFaction() {
@@ -704,7 +787,7 @@ const UI = (() => {
     zoneCache = null;
     invalidateBase();
     if (!handover) Logistics.refreshSupply(state, pf());
-    renderHandover(); renderTop(); renderLeft(); renderRight(); renderLog(); renderHexInfo(); renderHint(); redraw();
+    renderHandover(); renderTop(); renderBotbar(); renderLeft(); renderRight(); renderLog(); renderHexInfo(); renderHint(); redraw();
     window.__state = state;
   }
 
@@ -726,16 +809,26 @@ const UI = (() => {
   function renderHandover() {
     const el = $('handover');
     if (!handover) { el.hidden = true; return; }
-    const f = pf();
+    const f = Engine.phaseFaction(state);
     el.hidden = false;
+    // хід бота в грі кількох людей — карту приховано, бот ходить сам
+    if (AI.isBot(state, f) && !(state.campaign && state.campaign.over)) {
+      el.innerHTML = `<div class="ho-card" style="border-top-color:${FC[f]}">
+        <div class="ho-time">${esc(Engine.timeLabel(state.time))}${Engine.isNight(state.time.hour) ? ' · ніч' : ''}</div>
+        <h2>${esc(CONFIG.factions[f].name)}</h2>
+        <p>Ходить ${esc(AI.CONTROLLER_NAMES[AI.controller(state, f)].toLowerCase())}…</p>
+      </div>`;
+      return;
+    }
+    const solo = playMode() === 'solo';
     el.innerHTML = `<div class="ho-card" style="border-top-color:${FC[f]}">
       <div class="ho-time">${esc(Engine.timeLabel(state.time))}${Engine.isNight(state.time.hour) ? ' · ніч' : ''} · фаза ${f + 1} з 3</div>
-      <h2>${esc(CONFIG.factions[f].name)}</h2>
-      <p>Передайте керування гравцю цієї фракції. Карта прихована, щоб інші сторони не бачили його розвідданих.</p>
+      <h2>${solo ? 'Ваш хід' : esc(CONFIG.factions[f].name)}</h2>
+      <p>${solo ? `${esc(CONFIG.factions[f].name)}. Боти зробили свої ходи — нижче те, що ви помітили за цей час.` : 'Передайте керування гравцю цієї фракції. Карта прихована, щоб інші сторони не бачили його розвідданих.'}</p>
       ${Politics.incoming(state, f).length ? `<p><b>Дипломатичні пропозиції: ${Politics.incoming(state, f).length}</b> — див. «Політика».</p>` : ''}
       ${state.campaign && state.campaign.over ? `<p><b>Кампанію завершено.</b> ${esc(state.campaign.reason)}</p>` : ''}
       ${alertsHtml(f)}
-      <button type="button" class="primary" id="btnBeginPhase">Розпочати фазу</button>
+      <button type="button" class="primary" id="btnBeginPhase">${solo ? 'До справ' : 'Розпочати фазу'}</button>
     </div>`;
     const begin = () => {
       const fresh = newAlerts(f);
@@ -763,7 +856,8 @@ const UI = (() => {
       return `<span title="${esc(name)}" class="phase-chip${active ? ' active' : ''}" style="background:${bg}">${i + 1}. ${esc(abbr)}</span>`;
     }).join('');
     $('btnEndPhase').textContent = state.campaign && state.campaign.over ? 'Кампанію завершено' : p === 2 ? 'Завершити годину ▸' : 'Завершити фазу ▸';
-    $('btnEndPhase').disabled = handover || !!(state.campaign && state.campaign.over);
+    $('btnEndPhase').disabled = !commandable() || !!(state.campaign && state.campaign.over);
+    if (playMode() === 'spectate') $('btnEndPhase').textContent = 'Хід ботів';
     const inc = handover ? 0 : Politics.incoming(state, pf()).length;
     $('btnPol').innerHTML = 'Політика' + (inc ? `<span class="badge">${inc}</span>` : '');
   }
@@ -1079,7 +1173,7 @@ const UI = (() => {
     const g = Engine.grid(state);
     const ut = CONFIG.unitTypes[u.type];
     const p = u.personnel;
-    const mine = pf() === u.faction;
+    const mine = pf() === u.faction && commandable();
     const wl = Object.entries(u.weapons).map(([k, n]) => `<li><span>${esc(k)}${CONFIG.weapons[k] ? ` <small class="muted">${CONFIG.weapons[k].range} м</small>` : ''}</span><span>${n}</span></li>`).join('') || '<li><span>немає</span><span></span></li>';
     const al = Object.entries(u.ammo).map(([k, n]) => `<li><span>${esc(CONFIG.ammo[k] ? CONFIG.ammo[k].name : k)}</span><span${n === 0 ? ' class="bad"' : ''}>${n}</span></li>`).join('') || '<li><span>немає</span><span></span></li>';
     const st = unitStatus(u);
@@ -1144,7 +1238,7 @@ const UI = (() => {
   function cargoHtml(u) {
     const c = u.cargo || { weapons: {}, ammo: {}, goods: {} };
     const w = Object.entries(c.weapons).filter(([, n]) => n > 0), a = Object.entries(c.ammo).filter(([, n]) => n > 0), gd = Object.entries(c.goods || {}).filter(([, n]) => n > 0);
-    const mine = u.faction === pf();
+    const mine = u.faction === pf() && commandable();
     const canKg = Logistics.cargoCapKg(u) > 0;
     const head = canKg ? `Вантаж · ${Math.round(Logistics.cargoKg(u))}/${Logistics.cargoCapKg(u)} кг` : `Трофеї у вантажі · ${Loot.count(c.weapons)}/${Loot.cargoCap(u)}`;
     let btns = '';
@@ -1173,7 +1267,7 @@ const UI = (() => {
     const now = Intel.hexObserved(state, f, i);
     return list.map(fa => {
       const def = CONFIG.facilities[fa.type];
-      const mine = fa.owner === f;
+      const mine = fa.owner === f && commandable();
       const visible = mine || now;
       const st = fa.stock;
       const ammo = Object.entries(st.ammo).filter(([, n]) => n > 0).map(([k, n]) => `<li><span>${esc(CONFIG.ammo[k].name)}</span><span>${n}</span></li>`).join('');
@@ -1553,7 +1647,7 @@ const UI = (() => {
   }
 
   function endPhase() {
-    if (handover) return;
+    if (!commandable()) return;
     mode = null; preview = null;
     const r = Engine.endPhase(state);
     if (!r.ok) { toast(r.reason, true); return; }
@@ -1563,12 +1657,13 @@ const UI = (() => {
     }
     resetSelection();
     leftTab = 'own';
-    handover = true;
-    renderAll();
+    afterPhaseChange();
   }
 
   function onHexClick(i, button) {
     if (i < 0 || handover) return;
+    // не свій хід (ходить бот / глядач) — лише огляд карти, без наказів
+    if (!commandable()) { mode = null; preview = null; if (button === 2) return; }
     const sel = selectedId != null ? Engine.unitById(state, selectedId) : null;
     const f = pf();
     const enemiesHere = Engine.unitsAt(state, i).filter(u => u.faction !== f && !Politics.allied(state, f, u.faction) && Intel.isVisible(state, f, u.id));
@@ -1657,10 +1752,11 @@ const UI = (() => {
     canvas.addEventListener('wheel', e => { e.preventDefault(); zoomAt(e.deltaY < 0 ? 1.15 : 1 / 1.15, e.offsetX, e.offsetY); }, { passive: false });
     window.addEventListener('keydown', e => {
       if (!state || $('modalRoot').firstChild) { if (e.key === 'Escape') closeModal(); return; }
+      if (!$('mainmenu').hidden) { if (e.key === 'Escape') closeMainMenu(); return; }
       if (e.target && /INPUT|TEXTAREA/.test(e.target.tagName)) return;
       if (handover) return;
       if (e.key === 'Escape') { mode = null; preview = null; renderAll(); }
-      else if (e.key === 'Enter' && preview && preview.ok) { e.preventDefault(); preview.path ? confirmMove() : confirmAttack(); }
+      else if (e.key === 'Enter' && preview && preview.ok && commandable()) { e.preventDefault(); preview.path ? confirmMove() : confirmAttack(); }
       else if (e.key === '+' || e.key === '=') zoomAt(1.2);
       else if (e.key === '-') zoomAt(1 / 1.2);
     });
@@ -1684,7 +1780,7 @@ const UI = (() => {
     $('logAlerts').onchange = renderLog;
     $('logbody').addEventListener('click', e => { const b = e.target.closest('[data-log]'); if (b) jumpToLog(Number(b.dataset.log)); });
     $('btnSaves').onclick = openSaves;
-    $('btnNew').onclick = openNewGame;
+    $('btnNew').onclick = () => openMainMenu();
     $('btnHelp').onclick = openHelp;
     document.addEventListener('change', e => {
       const el = e.target.closest('[data-formsel]');
@@ -1792,7 +1888,7 @@ const UI = (() => {
   function loadState(res, source) {
     if (!res.ok) return res;
     try {
-      setState(res.state, { handover: true });
+      setState(res.state);
       (res.notes || []).forEach(n => toast(n));
       toast(`Завантажено: ${source}, ${Engine.timeLabel(state.time)}.`);
     } catch (e) {
@@ -1811,13 +1907,13 @@ const UI = (() => {
         <div style="display:flex;flex-direction:column;gap:6px">
         ${slots.map(s => `<div class="slot"><div><strong>${esc(s.name)}</strong><div class="meta">${s.empty ? 'порожньо' : `${esc(Engine.timeLabel(s))} · фаза ${s.phase + 1} · збережено ${fmtDate(s.savedAt)} · ${Math.round(s.bytes / 1024)} КБ`}</div></div>
           <div class="btns">
-            ${s.key !== 'auto' ? `<button type="button" data-save="${s.key}" ${avail ? '' : 'disabled'}>Зберегти сюди</button>` : ''}
+            ${s.key !== 'auto' ? `<button type="button" data-save="${s.key}" ${avail && state ? '' : 'disabled'}>Зберегти сюди</button>` : ''}
             <button type="button" data-load="${s.key}" ${s.empty ? 'disabled' : ''}>Завантажити</button>
             ${s.empty ? '' : `<button type="button" data-del="${s.key}">Видалити</button>`}
           </div></div>`).join('')}
         </div>
         <div><h3 style="margin:0 0 6px;font-size:13px">Експорт у файл</h3>
-          <div class="row"><button type="button" id="btnExport">Завантажити файл .json</button><button type="button" id="btnCopy">Скопіювати текст збереження</button></div>
+          <div class="row"><button type="button" id="btnExport" ${state ? '' : 'disabled'}>Завантажити файл .json</button><button type="button" id="btnCopy" ${state ? '' : 'disabled'}>Скопіювати текст збереження</button></div>
           <p class="notice">Якщо браузер блокує завантаження, скопіюйте текст і збережіть його у файл вручну.</p>
           <textarea id="exportText" readonly hidden></textarea>
         </div>
@@ -1877,17 +1973,64 @@ const UI = (() => {
     draw();
   }
 
-  function openNewGame() {
-    openModal('Нова кампанія', `
-      <p class="notice" style="font-size:13px">Тестовий сценарій: фрагмент області ${CONFIG.map.width}×${CONFIG.map.height} гексів (${CONFIG.map.width * 0.25}×${CONFIG.map.height * 0.25 * 0.87 | 0} км), три фракції в режимі «гаряче місце» з екраном передачі ходу. Поточна кампанія буде замінена; збережіть її, якщо потрібно.</p>
-      <div class="row"><label for="seedInput">Номер карти (seed)</label><input type="number" id="seedInput" value="1999" min="1" max="999999"></div>
-      <div class="row"><button type="button" class="primary" id="btnStart">Почати кампанію</button></div>`, () => {
-      $('btnStart').onclick = () => {
-        const seed = Math.max(1, Math.min(999999, parseInt($('seedInput').value, 10) || 1999));
-        setState(Engine.newGame(seed));
-        closeModal();
-      };
-    });
+  // ---------------------------------------------------------- головне меню
+  // Новий бій: хто керує кожною фракцією (людина / бот легкий / бот важкий) і номер карти.
+  const menuSel = ['human', 'easy', 'easy'];
+  function openMainMenu() {
+    const el = $('mainmenu');
+    const inGame = !!state;
+    const auto = SaveSystem.listSlots().find(x => x.key === 'auto');
+    const canContinue = !inGame && auto && !auto.empty;
+    const opt = (k, v, n) => `<option value="${v}"${menuSel[k] === v ? ' selected' : ''}>${n}</option>`;
+    el.hidden = false;
+    el.innerHTML = `<div class="mm-card" role="dialog" aria-modal="true" aria-labelledby="mmTitle">
+      <h1 id="mmTitle">Юготарія<small>Громадянська війна</small></h1>
+      <div class="mm-actions">
+        ${inGame ? '<button type="button" id="mmResume">Повернутися до гри</button>' : ''}
+        ${canContinue ? `<button type="button" id="mmContinue">Продовжити · ${esc(Engine.timeLabel(auto))}</button>` : ''}
+        <button type="button" id="mmLoad">Завантажити збереження</button>
+        <button type="button" id="mmHelp">Довідка</button>
+      </div>
+      <section class="mm-new">
+        <h2>Нова кампанія</h2>
+        <p class="notice">Оберіть, хто керує кожною стороною. Боти бачать лише те, що бачить їхня розвідка. Якщо людей кілька — гра «гаряче місце» з екраном передачі ходу; якщо жодної — ви спостерігаєте за ботами.</p>
+        <div class="mm-sides">
+          ${[0, 1, 2].map(k => `<label class="mm-side"><span class="dot" style="background:${FC[k]}"></span><span class="nm">${esc(CONFIG.factions[k].name)}</span>
+            <select data-side="${k}" aria-label="Хто керує: ${esc(CONFIG.factions[k].name)}">${opt(k, 'human', 'Людина')}${opt(k, 'easy', 'Бот — легкий')}${opt(k, 'hard', 'Бот — важкий')}</select></label>`).join('')}
+        </div>
+        <div class="row"><label for="seedInput">Номер карти</label><input type="number" id="seedInput" value="1999" min="1" max="999999">
+          <span class="notice">Однаковий номер — однакова карта.</span></div>
+        ${inGame ? '<p class="notice warn">Поточна кампанія буде замінена — збережіть її, якщо потрібно.</p>' : ''}
+        <div class="row"><button type="button" class="primary" id="btnStart">Почати кампанію</button><span class="notice" id="mmSummary"></span></div>
+      </section>
+    </div>`;
+    const summary = () => {
+      const h = menuSel.filter(x => x === 'human').length;
+      $('mmSummary').textContent = h === 0 ? 'Режим глядача: усі сторони — боти.' : h === 1 ? 'Одна людина проти ботів.' : `Гаряче місце: ${h} гравці${menuSel.some(x => x !== 'human') ? ' і боти' : ''}.`;
+    };
+    el.querySelectorAll('[data-side]').forEach(sel => sel.onchange = () => { menuSel[Number(sel.dataset.side)] = sel.value; summary(); });
+    summary();
+    $('btnStart').onclick = () => {
+      const seed = Math.max(1, Math.min(999999, parseInt($('seedInput').value, 10) || 1999));
+      const s = Engine.newGame(seed);
+      AI.configure(s, menuSel.slice());
+      spectator.paused = false;
+      setState(s);
+    };
+    if ($('mmResume')) $('mmResume').onclick = closeMainMenu;
+    if ($('mmContinue')) $('mmContinue').onclick = () => {
+      const r = loadState(SaveSystem.loadFromSlot('auto'), 'автозбереження');
+      if (!r.ok) toast(r.errors.join(' '), true);
+    };
+    $('mmLoad').onclick = openSaves;
+    $('mmHelp').onclick = openHelp;
+    setTimeout(() => { const b = $('btnStart'); if (b && !inGame) b.focus(); }, 0);
+  }
+  function closeMainMenu() {
+    const el = $('mainmenu');
+    if (!el || el.hidden) return;
+    if (!state) return;   // без гри меню не закривається
+    el.hidden = true; el.innerHTML = '';
   }
 
   let polTab = 'pop';
@@ -2071,6 +2214,13 @@ const UI = (() => {
     const weapons = Object.entries(CONFIG.weapons).map(([n, w]) => `<tr><td>${esc(n)}</td><td class="n">${w.range}</td><td class="n">${w.accuracy}</td><td class="n">${w.fp}</td><td class="n">${w.at}</td><td class="n">${w.ammoPerHour}</td><td>${esc(w.spec)}</td></tr>`).join('');
     const C = CONFIG.combat, Dt = CONFIG.detection;
     openModal('Довідка та параметри', `
+      <div><h3 style="margin:0 0 6px;font-size:13px">Боти</h3><ul>
+        <li>У меню (кнопка «Меню») для кожної фракції обирається, хто нею керує: людина, легкий або важкий бот.</li>
+        <li><b>Легкий</b> іде до найближчого чужого пункту й стріляє в першого видимого ворога, не зважаючи на співвідношення сил.</li>
+        <li><b>Важкий</b> тримає центри своїх пунктів, вибиває ворога зі своїх пунктів, розподіляє ударні сили між цілями й не кидає їх туди-сюди, зосереджує вогонь, відводить зламані підрозділи, поповнює боєприпаси, підвозить піхоту машинами, формує нові підрозділи й відповідає на дипломатичні пропозиції.</li>
+        <li>Обидва чесні: бачать лише те, що бачить їхня розвідка, і віддають ті самі накази, що й гравець.</li>
+        <li>Одна людина проти ботів — боти ходять одразу, а картка «Ваш хід» показує, що ви помітили за цей час. Без людей — режим глядача з паузою, кроком, темпом і вибором, чиїми очима дивитися.</li>
+      </ul></div>
       <div><h3 style="margin:0 0 6px;font-size:13px">Як грати</h3><ol>
         <li>Фази: Соціалістична влада → Демократичні повстанці → Націоналістичні повстанці → завершення години. Між фазами карта ховається — передайте пристрій наступному гравцю.</li>
         <li>Кожна фракція бачить лише свої підрозділи, противника в полі зору та застарілі позначки «?» з віком даних.</li>
@@ -2121,7 +2271,7 @@ const UI = (() => {
         <thead><tr><th>Підрозділ</th><th>Осіб</th><th>Пересування</th><th>ОР/год</th></tr></thead><tbody>${units}</tbody></table></div></div>`);
   }
 
-  return { init, setState, getState: () => state, toast, renderAll, __test: { hexClick: (i, b = 0) => onHexClick(i, b), select: id => selectUnit(id, true) } };
+  return { init, setState, openMainMenu, getState: () => state, toast, renderAll, __test: { hexClick: (i, b = 0) => onHexClick(i, b), select: id => selectUnit(id, true) } };
 })();
 
 // ------------------------------------------------------------------ запуск
@@ -2133,7 +2283,10 @@ const UI = (() => {
       const r = SaveSystem.deserialize(data.save);
       if (r.ok) st = r.state;
     }
-    UI.setState(st || Engine.newGame(1999), { handover: true });
+    // #quickstart — одразу гра трьох людей (для UI-тестів і швидкої перевірки), інакше — меню
+    if (st) UI.setState(st);
+    else if (location.hash === '#quickstart') UI.setState(Engine.newGame(1999));
+    else UI.openMainMenu();
   };
   const hot = window.claude && window.claude.hot;
   if (hot && hot.snapshot) hot.snapshot(() => ({ save: UI.getState() ? SaveSystem.serialize(UI.getState()) : null }));

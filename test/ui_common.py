@@ -3,7 +3,7 @@
 import os
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # YUGO_GAME — інший файл гри (напр. реліз із releases/) замість свіжої збірки
-GAME = 'file://' + os.path.abspath(os.environ.get('YUGO_GAME') or os.path.join(ROOT, 'dist', 'Yugotaria-Civil-War.html'))
+GAME = 'file://' + os.path.abspath(os.environ.get('YUGO_GAME') or os.path.join(ROOT, 'dist', 'Yugotaria-Civil-War.html')) + '#quickstart'
 OUT = os.environ.get('UI_OUT') or os.path.join(ROOT, 'test', 'out')
 os.makedirs(OUT, exist_ok=True)
 

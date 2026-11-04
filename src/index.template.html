@@ -190,6 +190,29 @@ aside, #log { background: var(--panel); min-height: 0; min-width: 0; }
   background-image: repeating-linear-gradient(135deg, transparent 0 22px, color-mix(in srgb, var(--line) 35%, transparent) 22px 23px);
 }
 #handover[hidden] { display: none; }
+/* Панель ходу ботів / режиму глядача у верхньому рядку */
+#botbar { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; font-size: 13px; }
+#botbar[hidden] { display: none; }
+#botbar .who { color: var(--muted); display: inline-flex; gap: 6px; align-items: center; }
+#botbar select { background: var(--bg); border: 1px solid var(--line); border-radius: 3px; padding: 3px 4px; margin-left: 4px; }
+#botbar button { padding: 3px 9px; }
+/* Головне меню */
+#mainmenu { position: fixed; inset: 0; z-index: 25; background: var(--bg); overflow-y: auto; display: grid; place-items: center; padding: 24px 16px;
+  background-image: repeating-linear-gradient(135deg, transparent 0 22px, color-mix(in srgb, var(--line) 35%, transparent) 22px 23px); }
+#mainmenu[hidden] { display: none; }
+.mm-card { background: var(--panel); border: 1px solid var(--line); border-top: 8px solid var(--accent); width: min(560px, 100%); padding: 26px 28px; display: flex; flex-direction: column; gap: 18px; }
+.mm-card h1 { margin: 0; font-size: 30px; letter-spacing: 0.1em; text-transform: uppercase; }
+.mm-card h1 small { display: block; font-size: 13px; letter-spacing: 0.14em; color: var(--muted); font-weight: 500; margin-top: 4px; }
+.mm-card h2 { margin: 0; font-size: 14px; text-transform: uppercase; letter-spacing: 0.08em; }
+.mm-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.mm-new { display: flex; flex-direction: column; gap: 12px; border-top: 1px solid var(--line); padding-top: 16px; }
+.mm-new .notice { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.45; }
+.mm-new .notice.warn { color: var(--warn); }
+.mm-sides { display: flex; flex-direction: column; gap: 6px; }
+.mm-side { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; padding: 8px 10px; background: var(--panel-2); border: 1px solid var(--line); }
+.mm-side .nm { font-weight: 600; }
+.mm-side select { background: var(--bg); border: 1px solid var(--line); border-radius: 3px; padding: 5px 6px; min-width: 150px; }
+@media (max-width: 520px) { .mm-card { padding: 20px 16px; } .mm-side { grid-template-columns: auto 1fr; } .mm-side select { grid-column: 1 / -1; width: 100%; } }
 .ho-card { background: var(--panel); border: 1px solid var(--line); border-top: 8px solid; padding: 26px 30px; max-width: 460px; text-align: center; display: flex; flex-direction: column; gap: 12px; align-items: center; }
 .ho-card h2 { margin: 0; font-size: 26px; text-transform: uppercase; letter-spacing: 0.06em; text-wrap: balance; }
 .ho-card p { margin: 0; color: var(--muted); line-height: 1.45; }
@@ -266,11 +289,12 @@ button.mini { font-size: 12px; padding: 2px 8px; }
     <div class="brand">Юготарія <small>етап 4+</small></div>
     <div class="clock" id="clock"></div>
     <div class="phases" id="phases"></div>
+    <div id="botbar" hidden></div>
     <div class="spacer"></div>
     <div class="top-actions">
       <button id="btnEndPhase" class="primary" type="button">Завершити фазу ▸</button>
       <button id="btnSaves" type="button">Збереження</button>
-      <button id="btnNew" type="button">Нова гра</button>
+      <button id="btnNew" type="button">Меню</button>
       <button id="btnEco" type="button">Економіка</button>
       <button id="btnPol" type="button">Політика</button>
       <button id="btnHelp" type="button">Довідка</button>
@@ -312,6 +336,7 @@ button.mini { font-size: 12px; padding: 2px 8px; }
     <div id="logbody"></div>
   </section>
 </div>
+<div id="mainmenu" hidden></div>
 <div id="toast"></div>
 <div id="modalRoot"></div>
 
