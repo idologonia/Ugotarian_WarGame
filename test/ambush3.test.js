@@ -22,7 +22,9 @@ function blank(seed=13){
   const target=g.idx(21,20);
   const r=Engine.issueMoveOrder(s,uaz.id,target);
   ok(r.ok,'move order accepted');
-  ok(g.dist(uaz.idx,bush.idx)===4,'ambush stopped the vehicle exactly at weapon range (4 hex), not waiting for passive detection range: '+g.dist(uaz.idx,bush.idx));
+  // Рішення автора («підпустити ближче»): засідка відкриває вогонь не на межі дальності, а в
+  // найближчій до неї точці маршруту цієї години — УАЗ їде прямо на засідника (ціль поруч).
+  ok(g.dist(uaz.idx,bush.idx)===1,'ambush let the vehicle into the kill zone (closest point of its route, 1 hex): '+g.dist(uaz.idx,bush.idx));
   ok(r.result.ambushed || (r.result.contact && r.result.contact.some(x=>x.id===bush.id)),'vehicle ambush fired: '+JSON.stringify({ambushed:r.result.ambushed,contact:(r.result.contact||[]).map(x=>x.id)}));
 }
 

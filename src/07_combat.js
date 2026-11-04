@@ -570,7 +570,7 @@ const Combat = (() => {
     const sid = state.map.settlement[tr.hex];
     if (sid >= 0) notes.push(`Ціль у населеному пункті ${state.map.settlements[sid].name}: можливі цивільні втрати й падіння підтримки${indirect ? ' (міни — утричі небезпечніші)' : ''}.`);
     return {
-      ok: true, unitId, target, hex: tr.hex, targetUnit: tr.unit ? tr.unit.id : null, marker: tr.marker || null, area: !!tr.area, areaObserved, zeroing,
+      ok: true, unitId, target, hex: tr.hex, targetUnit: tr.unit ? tr.unit.id : null, marker: tr.marker || null, area: !!tr.area, areaObserved, zeroing, prepared: !!opts.ambushPosition,
       dist, meters, indirect, intensity, freshness, weapons: list.map(x => ({ model: x.model, n: x.n, range: Math.round(x.range) })),
       ammo: fire.use, ammoText: ammoText(fire.use), notes, breaks
     };
@@ -603,11 +603,13 @@ const Combat = (() => {
     const step = (title, lines) => R.steps.push({ title, lines });
 
     // 1. Виявлення
-    const ambush = !Intel.isVisible(state, df, a.id);
+    // prepared — вогонь із підготовленої засідки (наказ «Засідка»), сильніший за випадковий
+    const prepared = !!pv.prepared;
+    const ambush = prepared || !Intel.isVisible(state, df, a.id);
     const dIntel = Intel.ensure(state)[af][d.id];
     step('1. Виявлення цілі', [
       `${a.name} (${Engine.fname(af)}) атакує ${dIntel ? dIntel.label : 'противника'} — ${d.name} (${Engine.fname(df)}).`,
-      ambush ? `Засідка: ${d.name} не виявив атакуючого заздалегідь.` : `${d.name} знав про присутність атакуючого.`
+      prepared ? `Підготовлена засідка: ${a.name} чекав у засідці й відкрив вогонь першим.` : ambush ? `Засідка: ${d.name} не виявив атакуючого заздалегідь.` : `${d.name} знав про присутність атакуючого.`
     ]);
     // 2. Дальність і видимість
     step('2. Дальність і лінія видимості', [
@@ -615,7 +617,7 @@ const Combat = (() => {
       `Зброя в межах дальності: ${pv.weapons.map(w => `${w.model} ×${w.n} (${w.range} м)`).join(', ')}.`
     ]);
     // 3. Місцевість і чисельність
-    const firingFromPositions = a.stance === 'defend' && a.fort > 0;
+    const firingFromPositions = prepared || (a.stance === 'defend' && a.fort > 0);
     const aCover = coverOf(state, a, { advancing: !firingFromPositions });
     const dCover = coverOf(state, d, {});
     step('3. Місцевість, укриття, чисельність', [
@@ -643,12 +645,13 @@ const Combat = (() => {
       resD = hitUnit(state, d, fireA, dCover, extraLines);
       if (fireD) resA = hitUnit(state, aHit, fireD, aHitCover, extraLines);
     } else if (order === 'attacker') {
-      fireA = groupFire(state, a, pv.dist, pv.intensity, { mult: cfg.ambushAttacker, targetArmor: dArmor, roll: rollA });
-      fireLines.push(`Перший вогонь за атакуючим (засідка, вогонь ×${cfg.ambushAttacker}).`);
+      const mA = prepared ? cfg.ambushPositionAttacker : cfg.ambushAttacker, mD = prepared ? cfg.ambushPositionDefender : cfg.ambushDefender;
+      fireA = groupFire(state, a, pv.dist, pv.intensity, { mult: mA, targetArmor: dArmor, roll: rollA });
+      fireLines.push(`Перший вогонь за атакуючим (${prepared ? 'підготовлена засідка' : 'засідка'}, вогонь ×${mA}).`);
       resD = hitUnit(state, d, fireA, dCover, extraLines);
       if (dCanReply && d.personnel.fit > 0) {
-        fireD = groupFire(state, d, pv.dist, dIntensity, { mult: cfg.ambushDefender, targetArmor: aArmor, roll: rollD });
-        fireLines.push(`${d.name} відповідає із запізненням (×${cfg.ambushDefender}).`);
+        fireD = groupFire(state, d, pv.dist, dIntensity, { mult: mD, targetArmor: aArmor, roll: rollD });
+        fireLines.push(`${d.name} відповідає із запізненням (×${mD}).`);
         resA = hitUnit(state, aHit, fireD, aHitCover, extraLines);
       }
     } else {

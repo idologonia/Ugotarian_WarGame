@@ -427,6 +427,20 @@ const Engine = (() => {
     return out;
   }
 
+  // Гекси маршруту, які підрозділ ще пройде цієї години (за залишком ОР і пального)
+  function pathAheadThisHour(state, u, path) {
+    const g = grid(state), cls = moveClass(u);
+    const out = [];
+    let mp = u.mp, cur = u.idx;
+    for (const next of path) {
+      const dir = g.dirTo(cur, next);
+      const c = dir < 0 ? Infinity : stepCost(state, cls, cur, dir, next);
+      if (!isFinite(c) || c > mp + 1e-9) break;
+      mp -= c; out.push(next); cur = next;
+    }
+    return out;
+  }
+
   function executeMove(state, u) {
     const g = grid(state);
     const o = u.order;
@@ -482,19 +496,35 @@ const Engine = (() => {
         break;
       }
       // Засідка: хтось у стансі «Засідка» саме тепер побачив нас і стріляє першим
+      // Вогневий мішок: стріляють УСІ засідники, що дістають до цілі (запит гравця), шквальним
+      // вогнем; якщо на шквальний не вистачає боєприпасів — звичайним. Ціль знищено/розсіяно —
+      // решта не стріляє.
       const ambushers = ambushersAt(state, u);
-      if (ambushers.length) {
-        const w = ambushers[0];
-        Intel.update(state);   // Combat.attack читає кеш видимості — оновлюємо його під нову позицію
-        const r = Combat.attack(state, w.id, { unitId: u.id }, 'normal', { anyPhase: true, forceVisible: true });
-        if (r.ok) {
+      // «Підпустити ближче» (запит гравця): засідка не стріляє, щойно ціль зайшла в дальність,
+      // а чекає, поки та дійде до найближчої до засідника точки маршруту, яку пройде цієї
+      // години. Якщо далі вона лише віддалятиметься (або зупиниться тут) — вогонь.
+      const ahead = pathAheadThisHour(state, u, o.path);
+      const trigger = ambushers.some(w => ahead.every(i => g.dist(i, w.idx) >= g.dist(u.idx, w.idx)));
+      ambushers.sort((a, b) => g.dist(a.idx, u.idx) - g.dist(b.idx, u.idx) || a.id - b.id);
+      if (ambushers.length && trigger) {
+        const fired = [];
+        for (const w of ambushers) {
+          if (!state.units.includes(u) || u.personnel.fit <= 0) break;
+          Intel.update(state);   // Combat.attack читає кеш видимості — оновлюємо його під нову позицію
+          const opts = { anyPhase: true, forceVisible: true, ambushPosition: true };
+          let r = Combat.attack(state, w.id, { unitId: u.id }, 'high', opts);
+          if (!r.ok) r = Combat.attack(state, w.id, { unitId: u.id }, 'normal', opts);
+          if (r.ok) fired.push(w);
+        }
+        if (fired.length) {
+          const names = fired.map(w => w.name).join(', ');
           if (!state.units.includes(u)) {
-            reason = `засідка біля ${g.label(u.idx)}: ${w.name} відкрив вогонь першим.`;
-            return { moved, spent, reason, contact: [w], ambushed: true };
+            reason = `засідка біля ${g.label(u.idx)}: вогонь відкрили ${names}.`;
+            return { moved, spent, reason, contact: fired, ambushed: true };
           }
-          contact = [w];
+          contact = fired;
           o.status = 'contact';
-          reason = `засідка! ${w.name} відкрив вогонь із ${g.label(w.idx)} першим — рух зупинено.`;
+          reason = `засідка! Першими відкрили вогонь ${names} — рух зупинено.`;
           break;
         }
       }
