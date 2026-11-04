@@ -4,7 +4,7 @@ let fails=0;const ok=(c,m)=>{if(!c){fails++;console.log('FAIL',m);}else console.
 const hours=(s,n)=>{for(let i=0;i<n*3;i++)Engine.endPhase(s);};
 // 1. розміщення
 {const s=Engine.newGame(1999);const F=Logistics.facilities(s);
- ok(F.length===16,'16 facilities placed, incl. neutral unclaimed ones ('+F.map(f=>f.type+':'+f.owner).join(', ')+')');
+ ok(F.length===19,'19 facilities placed (incl. 3 field depots on roads and neutral unclaimed ones) ('+F.map(f=>f.type+':'+f.owner).join(', ')+')');
  ok(F.every(f=>f.idx>=0&&s.map.terrain[f.idx]!==TERRAIN_ID.sea),'all on land');
  ok(F.filter(f=>f.type==='depot'&&f.owner>=0).length===3,'one owned depot per faction (plus neutral unclaimed depots elsewhere)');
  ok(Logistics.known(s,1).every(f=>f.owner!==0),'rebels do not know socialist facilities at start');
@@ -56,7 +56,7 @@ const hours=(s,n)=>{for(let i=0;i<n*3;i++)Engine.endPhase(s);};
 // 7. збереження
 {const s=Engine.newGame(1999);hours(s,2);const t=SaveSystem.serialize(s);const b=SaveSystem.deserialize(t);ok(b.ok,'v5 save ok');
  Engine.endPhase(s);Engine.endPhase(b.state);ok(SaveSystem.serialize(s).replace(/"savedAt":\d+/,'')===SaveSystem.serialize(b.state).replace(/"savedAt":\d+/,''),'loaded game continues identically');
- const v4=JSON.parse(t);v4.version=4;delete v4.facilities;delete v4.economy;const m=SaveSystem.deserialize(JSON.stringify(v4));ok(m.ok&&m.state.facilities.length===16,'v4 save migrated with facilities');}
+ const v4=JSON.parse(t);v4.version=4;delete v4.facilities;delete v4.economy;const m=SaveSystem.deserialize(JSON.stringify(v4));const nNew=Engine.newGame(1999).facilities.length;ok(m.ok&&m.state.facilities.length===nNew,'v4 save migrated with facilities ('+m.state.facilities.length+'/'+nNew+')');}
 // 8. довга гра
 {const s=Engine.newGame(1999);let attacks=0;
  for(let h=0;h<48*3;h++){const f=Engine.phaseFaction(s);

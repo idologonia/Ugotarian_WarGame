@@ -95,8 +95,40 @@ const Logistics = (() => {
       }
       return pick(ih);
     };
-    makeFacility(state, 'ammo_plant', pickSpread(), owner(ih[0]) >= 0 ? soc : soc);
-    makeFacility(state, 'arms_plant', pickSpread());
+    // Запит гравця: «вивести частину складів і заводів ЗА МЕЖІ населених пунктів». Заводи
+    // боєприпасів і зброї, польові склади фракцій і нічийні покинуті об’єкти стоять на окремих
+    // майданчиках біля доріг, за 3–6 гексів від межі пункту: їх треба утримувати й захищати
+    // окремо (з селом/містом вони не переходять — див. 05_engine.js, смуга дороги).
+    const hexesOf = S.map(() => []);
+    for (let i = 0; i < m.settlement.length; i++) if (m.settlement[i] >= 0 && hexesOf[m.settlement[i]]) hexesOf[m.settlement[i]].push(i);
+    const distTo = (i, sid) => { let d = Infinity; for (const j of hexesOf[sid]) { const x = grid.dist(i, j); if (x < d) d = x; } return d; };
+    const nearRoad = i => m.road[i] > 0 || [0, 1, 2, 3, 4, 5].some(d => { const n = grid.neighbor(i, d); return n >= 0 && m.road[n] > 0; });
+    const pickOutside = (home, ownerF, opts = {}) => {
+      let best = -1, bs = -Infinity;
+      for (const i of grid.within(home.center, home.kind === 'city' ? 14 : 10)) {
+        if (m.settlement[i] >= 0 || used.has(i) || !passableFoot(state, i) || m.river[i] || m.terrain[i] === TERRAIN_ID.coast) continue;
+        if (!opts.loose && !nearRoad(i)) continue;
+        const dHome = distTo(i, home.id);
+        if (dHome < (opts.loose ? 2 : 3) || dHome > (opts.loose ? 7 : 6)) continue;
+        if (S.some((x, k) => k !== home.id && distTo(i, k) < 3)) continue;
+        if (ownerF >= 0 && m.control[i] !== ownerF) continue;
+        if ([...used].some(j => grid.dist(i, j) < 2)) continue;
+        let sc = (m.road[i] ? 1 : 0) - Math.abs(dHome - 4) * 0.5;
+        // заводи — у тилу (далі від чужих пунктів); польові склади — у бік фронту (opts.towards)
+        if (opts.towards != null) sc -= grid.dist(i, opts.towards) * 0.2;
+        else { let e = Infinity; S.forEach(x => { if (x.control !== ownerF) e = Math.min(e, grid.dist(i, x.center)); }); sc += Math.min(e, 30) * 0.1; }
+        if (sc > bs || (sc === bs && i < best)) { bs = sc; best = i; }
+      }
+      if (best >= 0) used.add(best);
+      // місця біля дороги немає — шукаємо ширше й без прив’язки до дороги
+      if (best < 0 && !opts.loose) return pickOutside(home, ownerF, Object.assign({}, opts, { loose: true }));
+      return best;
+    };
+    const socTowns = S.map((x, k) => k).filter(k => S[k].control === soc).sort((a, b) => grid.dist(S[a].center, city.center) - grid.dist(S[b].center, city.center));
+    const plantHome = k => S[socTowns[Math.min(k, socTowns.length - 1)] != null ? socTowns[Math.min(k, socTowns.length - 1)] : 0];
+    const outOr = (home, ownerF, fallback, opts) => { const i = pickOutside(home, ownerF, opts); return i >= 0 ? i : fallback(); };
+    makeFacility(state, 'ammo_plant', outOr(plantHome(0), soc, pickSpread), soc);
+    makeFacility(state, 'arms_plant', outOr(plantHome(1), soc, pickSpread), soc);
     makeFacility(state, 'repair_base', pickSpread());
     makeFacility(state, 'refinery', pickSpread());
     for (const f of facilities(state)) if (f.owner == null) f.owner = soc;
@@ -113,11 +145,19 @@ const Logistics = (() => {
       makeFacility(state, 'depot', a, fac, `Склад (${st.name})`);
       makeFacility(state, 'hospital', b, fac, `Польовий шпиталь (${st.name})`);
     });
+    // польові склади фракцій поза пунктами — на дорозі в бік найближчого чужого пункту
+    [[soc, city], [1, S[1]], [2, S[2]]].forEach(([fac, home]) => {
+      if (!home || home.control !== fac) return;
+      const front = S.filter(x => x.control !== fac).sort((a, b) => grid.dist(a.center, home.center) - grid.dist(b.center, home.center))[0];
+      const i = pickOutside(home, fac, { towards: front ? front.center : null });
+      if (i >= 0) makeFacility(state, 'fieldDepot', i, fac, `Польовий склад (${home.name}, траса)`);
+    });
     // стартові запаси (ЗАГЛУШКИ сценарію)
     const fill = (f, st) => { addObj(f.stock.ammo, st.ammo); addObj(f.stock.weapons, st.weapons); addObj(f.stock.goods, st.goods); };
     for (const f of facilities(state)) {
       if (f.type === 'depot' && f.owner === 0) fill(f, { ammo: { '545': 20000, '762s': 8000, '762r': 10000, 'pg7': 60, 'atd': 30, 'm81': 200, '918': 1000, 'g30': 600, '127': 2000 }, weapons: { 'АК-74': 20, 'АКС-74У': 10, 'РПК': 4, 'ПКМ': 2, 'АГС-17': 1, 'НСВ «Утьос»': 2 }, goods: { fuel: 5000, med: 120, parts: 40, eng: 60 } });
       else if (f.type === 'depot') fill(f, { ammo: { '545': 3000, '762s': 12000, '762r': 4000, 'pg7': 30, 'atd': 20, 'm81': f.owner === 2 ? 120 : 0, '918': 300, 'g30': f.owner === 2 ? 300 : 0, '127': f.owner === 1 ? 800 : 300 }, weapons: { 'АКМ': 15 }, goods: { fuel: 1500, med: 40, parts: 10, eng: 20 } });
+      else if (f.type === 'fieldDepot') fill(f, { ammo: f.owner === 0 ? { '545': 4000, '762r': 2000, 'pg7': 12, 'm81': 40 } : { '762s': 3000, '545': 600, 'pg7': 8 }, goods: { fuel: 500, med: 10 } });
       else if (f.type === 'hospital') fill(f, { goods: { med: f.owner === 0 ? 60 : 20 } });
       else if (f.type === 'refinery') fill(f, { goods: { crude: 2000 } });
     }
@@ -131,10 +171,14 @@ const Logistics = (() => {
       // Примітка: тут (placeScenario) це викликається ДО Politics.init — st.pop ще не існує,
       // тож перевіряємо control/kind, не населення.
       if (st.control < 0 || st.control === soc) return;
-      const near = grid.within(st.center, 2).filter(i => m.terrain[i] !== TERRAIN_ID.sea && !m.river[i] && !used.has(i)).sort((x, y) => grid.dist(x, st.center) - grid.dist(y, st.center) || x - y);
-      if (!near.length) return;
-      used.add(near[0]);
-      makeFacility(state, sid % 2 ? 'repair_base' : 'depot', near[0], -1, `Покинутий об’єкт (${st.name})`);
+      // поза селом, біля дороги (запит гравця); якщо місця немає — як раніше, біля центру
+      let at = pickOutside(st, st.control);
+      if (at < 0) {
+        const near = grid.within(st.center, 2).filter(i => m.terrain[i] !== TERRAIN_ID.sea && !m.river[i] && !used.has(i)).sort((x, y) => grid.dist(x, st.center) - grid.dist(y, st.center) || x - y);
+        if (!near.length) return;
+        at = near[0]; used.add(at);
+      }
+      makeFacility(state, sid % 2 ? 'repair_base' : 'depot', at, -1, `Покинутий об’єкт (${st.name})`);
     });
   }
 

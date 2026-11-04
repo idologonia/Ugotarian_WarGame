@@ -40,7 +40,9 @@ const hours=(s,n)=>{for(let i=0;i<n*3;i++)Engine.endPhase(s);};
   const neutral=Logistics.facilities(s).filter(f=>f.owner===-1);
   ok(neutral.length>0,'neutral unclaimed facilities exist: '+neutral.length);
   ok(neutral.every(f=>Logistics.stockKg(f.stock)===0),'neutral facilities start empty');
-  ok(neutral.every(f=>s.map.settlements[s.map.settlement[f.idx]].control!==0),'neutral facilities sit in non-socialist territory');
+  // винесені за межі сіл (запит гравця) — тож перевіряємо контроль території, а не село
+  ok(neutral.every(f=>s.map.control[f.idx]!==0),'neutral facilities sit in non-socialist territory');
+  ok(neutral.every(f=>s.map.settlement[f.idx]<0),'neutral facilities stand outside settlements');
   // не переходять автоматично за контролем гекса
   const f=neutral[0];
   hours(s,3);

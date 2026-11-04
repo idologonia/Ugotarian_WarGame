@@ -2240,7 +2240,7 @@ const Engine = (() => {
       else autoDeployed = ' УВАГА: не вистачає очок руху, щоб одразу розгорнути групову зброю — вона поки не стрілятиме (розгорніть наказом «Розгорнути»).';
     }
     if (stance === 'defend') log(state, `${u.name}: наказ «Оборона» у ${g.label(u.idx)}. Кожна повна година на місці додає рівень обладнаних позицій (макс. ${CONFIG.combat.fortMax}).${autoDeployed}`, 'order', u.faction);
-    else if (stance === 'ambush') log(state, `${u.name}: наказ «Засідка» у ${g.label(u.idx)} — підрозділ завмер і чекає. Щойно побачить ворога, що рухається в межах дальності прямого вогню (і сам ще не буде ним виявлений), відкриє вогонь першим, перериваючи його рух. Один постріл за годину; будь-який рух чи атака скасовує засідку.${autoDeployed}`, 'order', u.faction);
+    else if (stance === 'ambush') log(state, `${u.name}: наказ «Засідка» у ${g.label(u.idx)} — підрозділ завмер і чекає. Підпустить ворога, що рухається поруч, до найближчої точки його маршруту й відкриє вогонь першим разом з іншими засідками, що дістають, — рух ворога перерветься. Один постріл за годину; будь-який рух чи атака скасовує засідку.${autoDeployed}`, 'order', u.faction);
     else log(state, `${u.name}: наказ «Розвідка» — спостереження з ${g.label(u.idx)}, дальність +${CONFIG.detection.observeBonus}, маскування +${CONFIG.detection.stanceConcealment}.`, 'order', u.faction);
     Intel.update(state);
     snapshot(state, u);
@@ -2582,6 +2582,9 @@ const Engine = (() => {
             let rFlipped = 0, rContested = 0;
             for (const idx of roadHexes) {
               if (state.map.control[idx] === c) continue;
+              // об’єкти поза пунктами (заводи, польові склади на трасі) разом із селом не
+              // переходять — їх треба взяти окремо, утримавши гекс
+              if (typeof Logistics !== 'undefined' && Logistics.facilityAt(state, idx).length) continue;
               const list = occ.get(idx);
               const hasEnemy = list && list.some(u => u.faction !== c && u.personnel.fit > 0);
               if (hasEnemy) { rContested++; continue; }
@@ -4666,8 +4669,40 @@ const Logistics = (() => {
       }
       return pick(ih);
     };
-    makeFacility(state, 'ammo_plant', pickSpread(), owner(ih[0]) >= 0 ? soc : soc);
-    makeFacility(state, 'arms_plant', pickSpread());
+    // Запит гравця: «вивести частину складів і заводів ЗА МЕЖІ населених пунктів». Заводи
+    // боєприпасів і зброї, польові склади фракцій і нічийні покинуті об’єкти стоять на окремих
+    // майданчиках біля доріг, за 3–6 гексів від межі пункту: їх треба утримувати й захищати
+    // окремо (з селом/містом вони не переходять — див. 05_engine.js, смуга дороги).
+    const hexesOf = S.map(() => []);
+    for (let i = 0; i < m.settlement.length; i++) if (m.settlement[i] >= 0 && hexesOf[m.settlement[i]]) hexesOf[m.settlement[i]].push(i);
+    const distTo = (i, sid) => { let d = Infinity; for (const j of hexesOf[sid]) { const x = grid.dist(i, j); if (x < d) d = x; } return d; };
+    const nearRoad = i => m.road[i] > 0 || [0, 1, 2, 3, 4, 5].some(d => { const n = grid.neighbor(i, d); return n >= 0 && m.road[n] > 0; });
+    const pickOutside = (home, ownerF, opts = {}) => {
+      let best = -1, bs = -Infinity;
+      for (const i of grid.within(home.center, home.kind === 'city' ? 14 : 10)) {
+        if (m.settlement[i] >= 0 || used.has(i) || !passableFoot(state, i) || m.river[i] || m.terrain[i] === TERRAIN_ID.coast) continue;
+        if (!opts.loose && !nearRoad(i)) continue;
+        const dHome = distTo(i, home.id);
+        if (dHome < (opts.loose ? 2 : 3) || dHome > (opts.loose ? 7 : 6)) continue;
+        if (S.some((x, k) => k !== home.id && distTo(i, k) < 3)) continue;
+        if (ownerF >= 0 && m.control[i] !== ownerF) continue;
+        if ([...used].some(j => grid.dist(i, j) < 2)) continue;
+        let sc = (m.road[i] ? 1 : 0) - Math.abs(dHome - 4) * 0.5;
+        // заводи — у тилу (далі від чужих пунктів); польові склади — у бік фронту (opts.towards)
+        if (opts.towards != null) sc -= grid.dist(i, opts.towards) * 0.2;
+        else { let e = Infinity; S.forEach(x => { if (x.control !== ownerF) e = Math.min(e, grid.dist(i, x.center)); }); sc += Math.min(e, 30) * 0.1; }
+        if (sc > bs || (sc === bs && i < best)) { bs = sc; best = i; }
+      }
+      if (best >= 0) used.add(best);
+      // місця біля дороги немає — шукаємо ширше й без прив’язки до дороги
+      if (best < 0 && !opts.loose) return pickOutside(home, ownerF, Object.assign({}, opts, { loose: true }));
+      return best;
+    };
+    const socTowns = S.map((x, k) => k).filter(k => S[k].control === soc).sort((a, b) => grid.dist(S[a].center, city.center) - grid.dist(S[b].center, city.center));
+    const plantHome = k => S[socTowns[Math.min(k, socTowns.length - 1)] != null ? socTowns[Math.min(k, socTowns.length - 1)] : 0];
+    const outOr = (home, ownerF, fallback, opts) => { const i = pickOutside(home, ownerF, opts); return i >= 0 ? i : fallback(); };
+    makeFacility(state, 'ammo_plant', outOr(plantHome(0), soc, pickSpread), soc);
+    makeFacility(state, 'arms_plant', outOr(plantHome(1), soc, pickSpread), soc);
     makeFacility(state, 'repair_base', pickSpread());
     makeFacility(state, 'refinery', pickSpread());
     for (const f of facilities(state)) if (f.owner == null) f.owner = soc;
@@ -4684,11 +4719,19 @@ const Logistics = (() => {
       makeFacility(state, 'depot', a, fac, `Склад (${st.name})`);
       makeFacility(state, 'hospital', b, fac, `Польовий шпиталь (${st.name})`);
     });
+    // польові склади фракцій поза пунктами — на дорозі в бік найближчого чужого пункту
+    [[soc, city], [1, S[1]], [2, S[2]]].forEach(([fac, home]) => {
+      if (!home || home.control !== fac) return;
+      const front = S.filter(x => x.control !== fac).sort((a, b) => grid.dist(a.center, home.center) - grid.dist(b.center, home.center))[0];
+      const i = pickOutside(home, fac, { towards: front ? front.center : null });
+      if (i >= 0) makeFacility(state, 'fieldDepot', i, fac, `Польовий склад (${home.name}, траса)`);
+    });
     // стартові запаси (ЗАГЛУШКИ сценарію)
     const fill = (f, st) => { addObj(f.stock.ammo, st.ammo); addObj(f.stock.weapons, st.weapons); addObj(f.stock.goods, st.goods); };
     for (const f of facilities(state)) {
       if (f.type === 'depot' && f.owner === 0) fill(f, { ammo: { '545': 20000, '762s': 8000, '762r': 10000, 'pg7': 60, 'atd': 30, 'm81': 200, '918': 1000, 'g30': 600, '127': 2000 }, weapons: { 'АК-74': 20, 'АКС-74У': 10, 'РПК': 4, 'ПКМ': 2, 'АГС-17': 1, 'НСВ «Утьос»': 2 }, goods: { fuel: 5000, med: 120, parts: 40, eng: 60 } });
       else if (f.type === 'depot') fill(f, { ammo: { '545': 3000, '762s': 12000, '762r': 4000, 'pg7': 30, 'atd': 20, 'm81': f.owner === 2 ? 120 : 0, '918': 300, 'g30': f.owner === 2 ? 300 : 0, '127': f.owner === 1 ? 800 : 300 }, weapons: { 'АКМ': 15 }, goods: { fuel: 1500, med: 40, parts: 10, eng: 20 } });
+      else if (f.type === 'fieldDepot') fill(f, { ammo: f.owner === 0 ? { '545': 4000, '762r': 2000, 'pg7': 12, 'm81': 40 } : { '762s': 3000, '545': 600, 'pg7': 8 }, goods: { fuel: 500, med: 10 } });
       else if (f.type === 'hospital') fill(f, { goods: { med: f.owner === 0 ? 60 : 20 } });
       else if (f.type === 'refinery') fill(f, { goods: { crude: 2000 } });
     }
@@ -4702,10 +4745,14 @@ const Logistics = (() => {
       // Примітка: тут (placeScenario) це викликається ДО Politics.init — st.pop ще не існує,
       // тож перевіряємо control/kind, не населення.
       if (st.control < 0 || st.control === soc) return;
-      const near = grid.within(st.center, 2).filter(i => m.terrain[i] !== TERRAIN_ID.sea && !m.river[i] && !used.has(i)).sort((x, y) => grid.dist(x, st.center) - grid.dist(y, st.center) || x - y);
-      if (!near.length) return;
-      used.add(near[0]);
-      makeFacility(state, sid % 2 ? 'repair_base' : 'depot', near[0], -1, `Покинутий об’єкт (${st.name})`);
+      // поза селом, біля дороги (запит гравця); якщо місця немає — як раніше, біля центру
+      let at = pickOutside(st, st.control);
+      if (at < 0) {
+        const near = grid.within(st.center, 2).filter(i => m.terrain[i] !== TERRAIN_ID.sea && !m.river[i] && !used.has(i)).sort((x, y) => grid.dist(x, st.center) - grid.dist(y, st.center) || x - y);
+        if (!near.length) return;
+        at = near[0]; used.add(at);
+      }
+      makeFacility(state, sid % 2 ? 'repair_base' : 'depot', at, -1, `Покинутий об’єкт (${st.name})`);
     });
   }
 
@@ -7994,8 +8041,21 @@ const AI = (() => {
   }
 
   // ------------------------------------------------------------ економіка (важкий)
+  // Експорт у РФ (соц. влада): продаємо надлишок пального й нафти, лишаючи запас для армії
+  function exportSurplus(ctx) {
+    const { state, f } = ctx;
+    if (f !== 0 || Foreign.saleCooldownLeft(state, f) > 0) return;
+    const RT = CONFIG.russiaTrade;
+    for (const [key, keep] of [['fuel', 3000], ['crude', 2000]]) {
+      const n = RT.items[key].n;
+      const batches = Math.min(5, Math.floor((Foreign.saleAvailable(state, f, key) - keep) / n));
+      if (batches >= 1 && !Foreign.saleReason(state, f, key, batches) && ok(Foreign.sellRF(state, f, key, batches))) { ctx.stats.other++; return; }
+    }
+  }
+
   function economy(ctx) {
     const { state, f, g } = ctx;
+    safe(ctx, 'експорт', () => exportSurplus(ctx));
     const eco = Logistics.ensureEconomy(state)[f];
     const stores = Logistics.facilities(state).filter(x => Logistics.isStore(x) && x.owner === f && !x.destroyed);
     if (!stores.length) return;
@@ -10678,7 +10738,7 @@ const UI = (() => {
         <li><b>Вогонь на придушення</b>: окрема, дешевша й слаболетальна інтенсивність вогню (перемикач «Вогонь» у картці підрозділу). На відміну від звичайної атаки, дозволяє прямій зброї (автомати, кулемети тощо, не лише міномету) бити по гексу БЕЗ виявленого живого противника — по застарілій позначці або просто по ймовірній позиції (потрібні дальність і лінія видимості, як для звичайної атаки). Якщо там справді хтось є — його придушать і, можливо, зачеплять; якщо ні — боєприпаси просто витрачено. По відомому противнику теж можна стріляти на придушення — дешевше й менш летально, але супротивник відповість зі звичайною силою.</li>
         <li><b>Пристрілка</b>: якщо навісна зброя, не рухаючись, б’є по тій самій точці годину за годиною, точність зростає — 1-й постріл ×${CONFIG.combat.zeroing.first}, 2-й ×${CONFIG.combat.zeroing.second}, 3-й і далі ×${CONFIG.combat.zeroing.third} (видно в попередньому перегляді атаки). Пропуск години, зміна цілі або рух скидають пристрілку до початку.</li>
         <li><b>Контрбатарейне виявлення</b>: якщо дальняк влучає по вас ${CONFIG.combat.counterBattery.hitsForDetect}-й раз поспіль з однієї позиції, ви отримуєте приблизну позицію (звук вильоту + час підльоту — напрямок точний, дистанція із похибкою ±${CONFIG.combat.counterBattery.distanceErrorShare * 100}%) як невпізнаний «?» у списку розвідки. Це лише здогад — справжнє виявлення (пряма видимість) завжди точніше й перекриває його.</li>
-        <li><b>Засідка</b>: наказ для підрозділів із прямою зброєю. Підрозділ завмирає; щойно побачить ворога, що рухається в межах дальності стрільби й сам ще не буде ним виявлений, відкриває вогонь першим (із бонусом за несподіваність), перериваючи його рух. Спрацьовує раз на годину на підрозділ; рух, атака чи інший наказ скасовують засідку. Якщо в підрозділу є нерозгорнута групова зброя (АГС, «Утьос») — вона розгортається автоматично разом із засідкою чи обороною; без цього засідка стріляла б лише особистою зброєю бійців (майже без ефекту по техніці).</li>
+        <li><b>Засідка</b>: наказ для підрозділів із прямою зброєю. Підрозділ завмирає й підпускає ворога, що рухається поруч: вогонь відкривається, коли той дійде до найближчої до засідки точки свого маршруту (а не на межі дальності). Тоді разом б’ють усі ваші підрозділи в засідці, що дістають до цілі, — шквальним вогнем з укриття, перший вогонь ×${CONFIG.combat.ambushPositionAttacker}, відповідь цілі лише ×${CONFIG.combat.ambushPositionDefender}; рух цілі переривається. Спрацьовує раз на годину на підрозділ; рух, атака чи інший наказ скасовують засідку. Якщо в підрозділу є нерозгорнута групова зброя (АГС, «Утьос») — вона розгортається автоматично разом із засідкою чи обороною; без цього засідка стріляла б лише особистою зброєю бійців (майже без ефекту по техніці).</li>
         <li><b>Інженери</b>: понтонний міст (${CONFIG.engineering.bridge.hours} год), бліндаж у гексі (+${CONFIG.engineering.shelter.cover * 100}% укриття всім, до ${CONFIG.engineering.shelter.max} рівнів; захищає й польовий склад під ним), мінні поля (${CONFIG.engineering.mineAp.name.toLowerCase()}, ${CONFIG.engineering.mineAt.name.toLowerCase()}) та розмінування, ремонт своїх об’єктів, підрив мостів, відновлення уламків техніки. Матеріали — інженерне майно, запчастини або міни: зі складу поруч, у зоні постачання або з ВЛАСНОГО вантажу відділення (до ${CONFIG.logistics.footCargoKg.eng_squad} кг) — завантажте їх самостійно на складі заздалегідь («Завантажити» в картці відділення), і можна будувати будь-де, не чекаючи на підвіз.</li>
         <li><b>Окопи й укриття</b>: піхота й інженери в наказі «Оборона» самі «обладнують позиції» (до ${CONFIG.combat.fortMax} рівнів, +${CONFIG.combat.fortCoverPerLevel * 100}% укриття/рівень) — але лише в полі чи лісі, не в горах (копати нема чим) і без потреби в забудові (там своя висока cover). Техніка окопів не копає. Бліндаж (інженерний проєкт вище) діє скрізь і не зникає, коли підрозділ іде геть.</li>
         <li><b>Мінні поля</b>: інженер мінує гекс, у якому стоїть (протипіхотні ПМН-2 — б'ють по піхоті, протитанкові ТМ-62М — пошкоджують чи знищують техніку). Хто наступає на чужі міни — отримує удар; свої міни підрозділ не чіпає. Частина поля детонує й витрачається за прохід, решта лишається. Інженер може розмінувати гекс («Розмінування»), знищивши чужі міни там.</li>

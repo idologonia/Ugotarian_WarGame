@@ -361,7 +361,7 @@ const Engine = (() => {
       else autoDeployed = ' УВАГА: не вистачає очок руху, щоб одразу розгорнути групову зброю — вона поки не стрілятиме (розгорніть наказом «Розгорнути»).';
     }
     if (stance === 'defend') log(state, `${u.name}: наказ «Оборона» у ${g.label(u.idx)}. Кожна повна година на місці додає рівень обладнаних позицій (макс. ${CONFIG.combat.fortMax}).${autoDeployed}`, 'order', u.faction);
-    else if (stance === 'ambush') log(state, `${u.name}: наказ «Засідка» у ${g.label(u.idx)} — підрозділ завмер і чекає. Щойно побачить ворога, що рухається в межах дальності прямого вогню (і сам ще не буде ним виявлений), відкриє вогонь першим, перериваючи його рух. Один постріл за годину; будь-який рух чи атака скасовує засідку.${autoDeployed}`, 'order', u.faction);
+    else if (stance === 'ambush') log(state, `${u.name}: наказ «Засідка» у ${g.label(u.idx)} — підрозділ завмер і чекає. Підпустить ворога, що рухається поруч, до найближчої точки його маршруту й відкриє вогонь першим разом з іншими засідками, що дістають, — рух ворога перерветься. Один постріл за годину; будь-який рух чи атака скасовує засідку.${autoDeployed}`, 'order', u.faction);
     else log(state, `${u.name}: наказ «Розвідка» — спостереження з ${g.label(u.idx)}, дальність +${CONFIG.detection.observeBonus}, маскування +${CONFIG.detection.stanceConcealment}.`, 'order', u.faction);
     Intel.update(state);
     snapshot(state, u);
@@ -703,6 +703,9 @@ const Engine = (() => {
             let rFlipped = 0, rContested = 0;
             for (const idx of roadHexes) {
               if (state.map.control[idx] === c) continue;
+              // об’єкти поза пунктами (заводи, польові склади на трасі) разом із селом не
+              // переходять — їх треба взяти окремо, утримавши гекс
+              if (typeof Logistics !== 'undefined' && Logistics.facilityAt(state, idx).length) continue;
               const list = occ.get(idx);
               const hasEnemy = list && list.some(u => u.faction !== c && u.personnel.fit > 0);
               if (hasEnemy) { rContested++; continue; }
