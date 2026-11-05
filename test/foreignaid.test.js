@@ -82,7 +82,7 @@ function run(f){
   const r2=Foreign.callVolunteers(s,1);
   ok(!r2.ok&&/раз на/.test(r2.reason),'second call refused by cooldown: '+r2.reason);
   hours(s,CONFIG.geopolitics.volunteers.deliveryHours+1);
-  const u=s.units.find(x=>x.faction===1&&/^Добровольці/.test(x.name));
+  const u=s.units.find(x=>x.faction===1&&x.foreignKind==='volunteers');
   ok(!!u,'called volunteers arrived');
   ok(u.experience===0,'volunteers are untrained (Недосвідчений), unlike PMC');
 }

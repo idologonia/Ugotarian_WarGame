@@ -686,6 +686,14 @@ const CONFIG = {
     // відкриває меню замовлення — кожен патрон пропонує свій набір items (ключ → тип
     // підрозділу, назва, множник ціни від базової pmc.money). У «Вагнера» (соц. влада) набір
     // багатший — додається МТ-ЛБ, саме як у реальних поставок цієї ПВК.
+    // Рішення автора (запит гравця: «добровольці — це не ПВК, ПВК — окрема движуха»): держава-
+    // спонсор (з нею — «стосунки», офіційні запити, інвестиції) і добровольці — окремо від ПВК.
+    // ПВК (patrons нижче) — лише найманці за гроші; добровольці приходять від своєї спільноти.
+    sponsors: {
+      0: { name: 'Росія',               volunteers: 'Російські добровольці' },
+      1: { name: 'Країни НАТО',         volunteers: 'Західні добровольці' },
+      2: { name: 'Закордонна діаспора', volunteers: 'Добровольці діаспори' }
+    },
     patrons: {
       0: { name: 'ПВК «Вагнер»', penaltyGroup: 'yug', ammo: null, entryName: 'Прикордонний перехід «Росія»',
            items: {
@@ -731,7 +739,7 @@ const CONFIG = {
       morale: 70,
       deliveryHours: 14,       // довше: добираються самостійно, нелегально
       liberationSupport: 6,    // «хвиля підтримки»: +6 підтримки у щойно звільненому пункті
-      callCooldownAt0: 96, callCooldownAt100: 24,  // спроба закликати: раз на 1-4 доби за стосунками
+      callCooldownAt0: 36, callCooldownAt100: 8,   // спроба закликати: раз на 8–36 год за стосунками (зменшено на запит гравця)
       callMoneyAt0: 1500, callMoneyAt100: 0,       // за поганих стосунків — платити за організацію переправи
       // Запит гравця: «добровольці — не ПВК, довго прибувають»: автоматична хвиля при звільненні
       // села тепер АСИМЕТРИЧНА — переможець (узяв село) отримує небагато (фаворити не спішать,
@@ -6974,12 +6982,14 @@ const Foreign = (() => {
   function geoArr(state) { if (!state.geo) state.geo = G().startRelation.slice(); return state.geo; }
   function geo(state, f) { return geoArr(state)[f]; }
   function patron(f) { return G().patrons[f]; }
+  // Держава-спонсор (стосунки, офіційні запити, інвестиції) — окремо від ПВК (patron)
+  function sponsor(f) { return (G().sponsors && G().sponsors[f]) || { name: patron(f).name, volunteers: 'Добровольці' }; }
   function adjustGeo(state, f, delta, why) {
     const arr = geoArr(state);
     const before = Math.round(arr[f]);
     arr[f] = Math.max(G().min, Math.min(G().max, arr[f] + delta));
     const after = Math.round(arr[f]);
-    if (after !== before) Engine.log(state, `${fname(f)}: стосунки з «${patron(f).name}» ${delta > 0 ? 'покращились' : 'погіршились'} (${before} → ${after}) — ${why}.`, 'event', f, null);
+    if (after !== before) Engine.log(state, `${fname(f)}: стосунки з «${sponsor(f).name}» ${delta > 0 ? 'покращились' : 'погіршились'} (${before} → ${after}) — ${why}.`, 'event', f, null);
   }
   // Лінійна інтерполяція между значенням «за гірших стосунків» (at0) і «за найкращих» (at100)
   function relLerp(state, f, at0, at100) {
@@ -7104,13 +7114,13 @@ const Foreign = (() => {
     const roll = hash2(seed ^ Math.imul(f + 1, 2654435761), state.time.turn, qty * 31 + key.length) * 100;
     const approved = roll < officialChance(state, f);
     if (!approved) {
-      Engine.log(state, `Офіційний запит до «${patron(f).name}»: партію «${officialItemName(key)}» відхилено.`, 'event', f);
+      Engine.log(state, `Офіційний запит до «${sponsor(f).name}»: партію «${officialItemName(key)}» відхилено.`, 'event', f);
       return { ok: true, approved: false };
     }
     Logistics.ensureEconomy(state)[f].money -= price;
     const o = { id: (state.nextMarketId = (state.nextMarketId || 0) + 1), faction: f, key, qty, n: it.n * qty, kind: it.kind, storeId, arrive: state.time.turn + OS_().deliveryHours, price };
     officialOrders(state).push(o);
-    Engine.log(state, `Офіційний запит до «${patron(f).name}»: СХВАЛЕНО — ${officialItemName(key)} ×${o.n} за ${price} грн. Доставка на «${store.name}» через ${OS_().deliveryHours} год.`, 'event', f);
+    Engine.log(state, `Офіційний запит до «${sponsor(f).name}»: СХВАЛЕНО — ${officialItemName(key)} ×${o.n} за ${price} грн. Доставка на «${store.name}» через ${OS_().deliveryHours} год.`, 'event', f);
     return { ok: true, approved: true };
   }
   function hourOfficial(state) {
@@ -7257,7 +7267,7 @@ const Foreign = (() => {
   function volCost(state, f) { return Math.round(relLerp(state, f, G().volunteers.callMoneyAt0, G().volunteers.callMoneyAt100)); }
   function callReason(state, f) {
     const left = volCooldownLeft(state, f);
-    if (left > 0) return `Заклик до діаспори можливий раз на ${volCooldownHours(state, f)} год. (ще ${left} год.)`;
+    if (left > 0) return `Заклик добровольців можливий раз на ${volCooldownHours(state, f)} год. (ще ${left} год.)`;
     const idx = entryIdx(state, f);
     const br = borderReason(state, f, idx >= 0 ? idx : null);
     if (br) return br;
@@ -7273,7 +7283,7 @@ const Foreign = (() => {
     if (cost > 0) Logistics.ensureEconomy(state)[f].money -= cost;
     lastVolTurn(state)[f] = state.time.turn;
     queueVolunteers(state, f, `спроба закликати добровольців${cost > 0 ? ` (−${cost} грн)` : ''}`);
-    Engine.log(state, `${fname(f)}: заклик до закордонної діаспори${cost > 0 ? ` (−${cost} грн)` : ''}. Прибуття через ${G().volunteers.deliveryHours} год, якщо перехід буде відкрито.`, 'event', f);
+    Engine.log(state, `${fname(f)}: заклик до добровольців («${sponsor(f).volunteers}»)${cost > 0 ? ` (−${cost} грн)` : ''}. Прибуття через ${G().volunteers.deliveryHours} год, якщо перехід буде відкрито.`, 'event', f);
     return { ok: true };
   }
   function queueVolunteers(state, f, why, opts) {
@@ -7340,13 +7350,14 @@ const Foreign = (() => {
       const unitType = o.unitType || kindCfg.unitType;
       const n = 1 + state.units.concat(state.lost || []).filter(u => u.faction === o.faction && u.foreignKind === o.kind).length;
       const u = Scenario.createUnit(state, unitType, o.faction, destIdx, n);
-      u.name = `${prefix} №${n} ${ABBR[o.faction]} (${P.name})${o.itemLabel ? ` — ${o.itemLabel}` : ''}`;
+      // ПВК — найманці конкретної компанії; добровольці — від своєї спільноти, без назви ПВК
+      u.name = o.kind === 'pmc' ? `${prefix} №${n} ${ABBR[o.faction]} (${P.name})${o.itemLabel ? ` — ${o.itemLabel}` : ''}` : `${sponsor(o.faction).volunteers} №${n} ${ABBR[o.faction]}`;
       u.foreignKind = o.kind;
       u.experience = kindCfg.experience; u.xp = 0;
       u.morale = kindCfg.morale; u.baseMorale = kindCfg.morale;
       u.mp = 0; u.movedThisPhase = true; u.deployed = false;
       state.units.push(u);
-      let txt = `«${destName}»: прибули ${o.kind === 'pmc' ? 'бійці ПВК' : 'добровольці'} від «${P.name}» — ${u.name}.`;
+      let txt = o.kind === 'pmc' ? `«${destName}»: прибули бійці ПВК від «${P.name}» — ${u.name}.` : `«${destName}»: прибули ${sponsor(o.faction).volunteers.toLowerCase()} — ${u.name}.`;
       if (o.kind === 'pmc' && P.ammo) {
         const store = Logistics.byId(state, o.storeId);
         store.stock.ammo[P.ammo.key] = (store.stock.ammo[P.ammo.key] || 0) + P.ammo.n;
@@ -7370,7 +7381,7 @@ const Foreign = (() => {
   }
 
   return { saleOrders, saleCooldownLeft, salePrice, salePriceMult, saleSources, saleAvailable, saleReason, sellRF,
-    geo, patron, adjustGeo, entryIdx, entryName, borderReason,
+    geo, patron, sponsor, adjustGeo, entryIdx, entryName, borderReason,
     pmcItems, pmcPrice, pmcCooldownLeft, pmcReason, hirePmc,
     officialReason, officialRequest, officialCooldownLeft, officialChance, officialOrders, officialItemName,
     investReason, requestInvestment, investCooldownLeft, investChance, investAmount, investOrders,
@@ -10577,6 +10588,17 @@ const UI = (() => {
         ${Recruit.orders(state).filter(o => o.faction === f).length ? `<ul class="list">${Recruit.orders(state).filter(o => o.faction === f).map(o => `<li><span>${esc(Recruit.itemName(o.key))} — ${o.n} ${esc(Recruit.itemUnit(o.key))}</span><span>прибуде о ${esc(Engine.timeLabel(Engine.addHours(state.time, o.arrive - state.time.turn)))}</span></li>`).join('')}</ul>` : ''}
       </div>`;
   }
+  // Іноземні інвестиції (повстанці): гроші від спонсора; може відмовити, сума й шанс — за стосунками
+  function investHtml(f) {
+    const I = CONFIG.geopolitics.investment;
+    const left = Foreign.investCooldownLeft(state, f);
+    const pend = Foreign.investOrders(state).filter(o => o.faction === f);
+    return `<div><h3 style="margin:0 0 6px;font-size:13px">Іноземні інвестиції — ${esc(Foreign.sponsor(f).name)}</h3>
+      <div class="form-row"><button type="button" class="primary" id="invReq" ${left > 0 ? 'disabled' : ''}>Подати заявку (≈${Foreign.investAmount(state, f)} грн)</button></div>
+      <p class="notice">Шанс схвалення ${Math.round(Foreign.investChance(state, f))}%, сума ${Foreign.investAmount(state, f)} грн (обидва залежать від стосунків). Гроші надходять через ${I.deliveryHours} год. Заявка — раз на ${I.cooldownHours} год${left > 0 ? ` (наступна через ${left} год)` : ''}.</p>
+      ${pend.length ? `<ul class="list">${pend.map(o => `<li><span>${o.amount} грн</span><span>надійде через ${Math.max(0, o.arrive - state.time.turn)} год</span></li>`).join('')}</ul>` : ''}
+    </div>`;
+  }
   // Торгівля з РФ (соц. влада): закупівля — офіційні запити (РФ може відмовити); продаж нафти,
   // пального й продукції заводів через перехід «Росія».
   function rfTradeHtml(f) {
@@ -10650,7 +10672,7 @@ const UI = (() => {
       <p class="notice">У полоні тримаємо: ${fmt(prisHeld)} чол. Наших у полоні: ${fmt(prisLost)} чол.${uncollected > 0 ? ` Непоховані тіла своїх у полі (тиснуть на мораль, поки не забрані): ${fmt(uncollected)}.` : ''}</p></div>
       ${f === 0 ? rfTradeHtml(f) : blackMarketHtml(f)}
       <div><h3 style="margin:0 0 6px;font-size:13px">Геополітика</h3>
-        <p class="notice">Прикордонний перехід: <b>${esc(Foreign.entryName(state, f))}</b> (${esc(Engine.grid(state).label(Foreign.entryIdx(state, f)))})${(() => { const br = Foreign.borderReason(state, f, null); return br ? ` — <span style="color:#b3261e">${esc(br)}</span>` : ' — відкритий.'; })()} Стосунки з патроном: <b>${Math.round(Foreign.geo(state, f))}%</b> (впливають на ціну й кулдаун нижче).</p>
+        <p class="notice">Прикордонний перехід: <b>${esc(Foreign.entryName(state, f))}</b> (${esc(Engine.grid(state).label(Foreign.entryIdx(state, f)))})${(() => { const br = Foreign.borderReason(state, f, null); return br ? ` — <span style="color:#b3261e">${esc(br)}</span>` : ' — відкритий.'; })()} Стосунки зі спонсором (<b>${esc(Foreign.sponsor(f).name)}</b>): <b>${Math.round(Foreign.geo(state, f))}%</b> — впливають на ціни, шанси й кулдауни нижче.</p>
       </div>
       <div><h3 style="margin:0 0 6px;font-size:13px">ПВК — «${esc(Foreign.patron(f).name)}»</h3>
         ${(() => { const left = Foreign.pmcCooldownLeft(state, f); return left > 0 ? `<p class="notice">Найняти знову можна через ${left} год.</p>` : ''; })()}
@@ -10667,10 +10689,11 @@ const UI = (() => {
         <p class="notice">Прибуває за ${CONFIG.geopolitics.pmc.deliveryHours} год на обраний склад, одразу з досвідом «${esc(CONFIG.experience[CONFIG.geopolitics.pmc.experience])}» й мораллю ${CONFIG.geopolitics.pmc.morale}${Foreign.patron(f).ammo ? `; піхотний взвод додатково привозить ${esc(CONFIG.ammo[Foreign.patron(f).ammo.key].name)} ×${Foreign.patron(f).ammo.n}` : ''}. Видима присутність ПВК щоразу підриває підтримку групи «${Foreign.patron(f).penaltyGroup === 'yug' ? 'юготарці' : Foreign.patron(f).penaltyGroup === 'rus' ? 'росіяни' : 'кавказці'}» у всіх ваших пунктах (−${CONFIG.geopolitics.pmc.supportPenalty}%), але покращує стосунки з патроном.</p>
         ${Foreign.queue(state).filter(o => o.faction === f && o.kind === 'pmc').length ? `<ul class="list">${Foreign.queue(state).filter(o => o.faction === f && o.kind === 'pmc').map(o => `<li><span>${esc(o.itemLabel || 'ПВК')} від «${esc(Foreign.patron(f).name)}»</span><span>прибуде о ${esc(Engine.timeLabel(Engine.addHours(state.time, o.arrive - state.time.turn)))}</span></li>`).join('')}</ul>` : ''}
       </div>
-      <div><h3 style="margin:0 0 6px;font-size:13px">Добровольці</h3>
+      ${f !== 0 ? investHtml(f) : ''}
+      <div><h3 style="margin:0 0 6px;font-size:13px">Добровольці — ${esc(Foreign.sponsor(f).volunteers.toLowerCase())}</h3>
         ${(() => { const left = Foreign.volCooldownLeft(state, f); return left > 0 ? `<p class="notice">Заклик знову можливий через ${left} год.</p>` : ''; })()}
         <div class="form-row">
-          <button type="button" class="primary" id="volCall">Закликати діаспору${Foreign.volCost(state, f) > 0 ? ` (${Foreign.volCost(state, f)} грн)` : ' (безкоштовно)'}</button>
+          <button type="button" class="primary" id="volCall">Закликати добровольців${Foreign.volCost(state, f) > 0 ? ` (${Foreign.volCost(state, f)} грн)` : ' (безкоштовно)'}</button>
         </div>
         <p class="notice">Прибудуть на прикордонний перехід через ${CONFIG.geopolitics.volunteers.deliveryHours} год, недосвідчені, без політичної ціни. Звільнення населеного пункту, що був під ворогом, само по собі викликає безкоштовну хвилю добровольців і підтримки — закликати додатково не потрібно. Кулдаун і ціна спроби залежать від стосунків із патроном.</p>
         ${Foreign.queue(state).filter(o => o.faction === f && o.kind === 'volunteers').length ? `<ul class="list">${Foreign.queue(state).filter(o => o.faction === f && o.kind === 'volunteers').map(o => `<li><span>${esc(o.why || 'Добровольці')}</span><span>прибудуть о ${esc(Engine.timeLabel(Engine.addHours(state.time, o.arrive - state.time.turn)))}</span></li>`).join('')}</ul>` : ''}
@@ -10690,6 +10713,11 @@ const UI = (() => {
       if (b) b.onclick = () => {
         const r = Recruit.buy(state, f, $('bmItem').value, Math.floor(Number($('bmQty').value) || 1), Number($('bmStore').value));
         if (!r.ok) toast(r.reason, true); else { toast('Замовлено.'); renderAll(); openEconomy(); }
+      };
+      const ib = root.querySelector('#invReq');
+      if (ib) ib.onclick = () => {
+        const r = Foreign.requestInvestment(state, f);
+        if (!r.ok) toast(r.reason, true); else { toast(r.approved ? `Інвестиції схвалено: ${r.amount} грн надійде через ${CONFIG.geopolitics.investment.deliveryHours} год.` : 'Заявку на інвестиції відхилено.', !r.approved); renderAll(); openEconomy(); }
       };
       const vb = root.querySelector('#volCall');
       if (vb) vb.onclick = () => {

@@ -15,12 +15,14 @@ const Foreign = (() => {
   function geoArr(state) { if (!state.geo) state.geo = G().startRelation.slice(); return state.geo; }
   function geo(state, f) { return geoArr(state)[f]; }
   function patron(f) { return G().patrons[f]; }
+  // Держава-спонсор (стосунки, офіційні запити, інвестиції) — окремо від ПВК (patron)
+  function sponsor(f) { return (G().sponsors && G().sponsors[f]) || { name: patron(f).name, volunteers: 'Добровольці' }; }
   function adjustGeo(state, f, delta, why) {
     const arr = geoArr(state);
     const before = Math.round(arr[f]);
     arr[f] = Math.max(G().min, Math.min(G().max, arr[f] + delta));
     const after = Math.round(arr[f]);
-    if (after !== before) Engine.log(state, `${fname(f)}: стосунки з «${patron(f).name}» ${delta > 0 ? 'покращились' : 'погіршились'} (${before} → ${after}) — ${why}.`, 'event', f, null);
+    if (after !== before) Engine.log(state, `${fname(f)}: стосунки з «${sponsor(f).name}» ${delta > 0 ? 'покращились' : 'погіршились'} (${before} → ${after}) — ${why}.`, 'event', f, null);
   }
   // Лінійна інтерполяція между значенням «за гірших стосунків» (at0) і «за найкращих» (at100)
   function relLerp(state, f, at0, at100) {
@@ -145,13 +147,13 @@ const Foreign = (() => {
     const roll = hash2(seed ^ Math.imul(f + 1, 2654435761), state.time.turn, qty * 31 + key.length) * 100;
     const approved = roll < officialChance(state, f);
     if (!approved) {
-      Engine.log(state, `Офіційний запит до «${patron(f).name}»: партію «${officialItemName(key)}» відхилено.`, 'event', f);
+      Engine.log(state, `Офіційний запит до «${sponsor(f).name}»: партію «${officialItemName(key)}» відхилено.`, 'event', f);
       return { ok: true, approved: false };
     }
     Logistics.ensureEconomy(state)[f].money -= price;
     const o = { id: (state.nextMarketId = (state.nextMarketId || 0) + 1), faction: f, key, qty, n: it.n * qty, kind: it.kind, storeId, arrive: state.time.turn + OS_().deliveryHours, price };
     officialOrders(state).push(o);
-    Engine.log(state, `Офіційний запит до «${patron(f).name}»: СХВАЛЕНО — ${officialItemName(key)} ×${o.n} за ${price} грн. Доставка на «${store.name}» через ${OS_().deliveryHours} год.`, 'event', f);
+    Engine.log(state, `Офіційний запит до «${sponsor(f).name}»: СХВАЛЕНО — ${officialItemName(key)} ×${o.n} за ${price} грн. Доставка на «${store.name}» через ${OS_().deliveryHours} год.`, 'event', f);
     return { ok: true, approved: true };
   }
   function hourOfficial(state) {
@@ -298,7 +300,7 @@ const Foreign = (() => {
   function volCost(state, f) { return Math.round(relLerp(state, f, G().volunteers.callMoneyAt0, G().volunteers.callMoneyAt100)); }
   function callReason(state, f) {
     const left = volCooldownLeft(state, f);
-    if (left > 0) return `Заклик до діаспори можливий раз на ${volCooldownHours(state, f)} год. (ще ${left} год.)`;
+    if (left > 0) return `Заклик добровольців можливий раз на ${volCooldownHours(state, f)} год. (ще ${left} год.)`;
     const idx = entryIdx(state, f);
     const br = borderReason(state, f, idx >= 0 ? idx : null);
     if (br) return br;
@@ -314,7 +316,7 @@ const Foreign = (() => {
     if (cost > 0) Logistics.ensureEconomy(state)[f].money -= cost;
     lastVolTurn(state)[f] = state.time.turn;
     queueVolunteers(state, f, `спроба закликати добровольців${cost > 0 ? ` (−${cost} грн)` : ''}`);
-    Engine.log(state, `${fname(f)}: заклик до закордонної діаспори${cost > 0 ? ` (−${cost} грн)` : ''}. Прибуття через ${G().volunteers.deliveryHours} год, якщо перехід буде відкрито.`, 'event', f);
+    Engine.log(state, `${fname(f)}: заклик до добровольців («${sponsor(f).volunteers}»)${cost > 0 ? ` (−${cost} грн)` : ''}. Прибуття через ${G().volunteers.deliveryHours} год, якщо перехід буде відкрито.`, 'event', f);
     return { ok: true };
   }
   function queueVolunteers(state, f, why, opts) {
@@ -381,13 +383,14 @@ const Foreign = (() => {
       const unitType = o.unitType || kindCfg.unitType;
       const n = 1 + state.units.concat(state.lost || []).filter(u => u.faction === o.faction && u.foreignKind === o.kind).length;
       const u = Scenario.createUnit(state, unitType, o.faction, destIdx, n);
-      u.name = `${prefix} №${n} ${ABBR[o.faction]} (${P.name})${o.itemLabel ? ` — ${o.itemLabel}` : ''}`;
+      // ПВК — найманці конкретної компанії; добровольці — від своєї спільноти, без назви ПВК
+      u.name = o.kind === 'pmc' ? `${prefix} №${n} ${ABBR[o.faction]} (${P.name})${o.itemLabel ? ` — ${o.itemLabel}` : ''}` : `${sponsor(o.faction).volunteers} №${n} ${ABBR[o.faction]}`;
       u.foreignKind = o.kind;
       u.experience = kindCfg.experience; u.xp = 0;
       u.morale = kindCfg.morale; u.baseMorale = kindCfg.morale;
       u.mp = 0; u.movedThisPhase = true; u.deployed = false;
       state.units.push(u);
-      let txt = `«${destName}»: прибули ${o.kind === 'pmc' ? 'бійці ПВК' : 'добровольці'} від «${P.name}» — ${u.name}.`;
+      let txt = o.kind === 'pmc' ? `«${destName}»: прибули бійці ПВК від «${P.name}» — ${u.name}.` : `«${destName}»: прибули ${sponsor(o.faction).volunteers.toLowerCase()} — ${u.name}.`;
       if (o.kind === 'pmc' && P.ammo) {
         const store = Logistics.byId(state, o.storeId);
         store.stock.ammo[P.ammo.key] = (store.stock.ammo[P.ammo.key] || 0) + P.ammo.n;
@@ -411,7 +414,7 @@ const Foreign = (() => {
   }
 
   return { saleOrders, saleCooldownLeft, salePrice, salePriceMult, saleSources, saleAvailable, saleReason, sellRF,
-    geo, patron, adjustGeo, entryIdx, entryName, borderReason,
+    geo, patron, sponsor, adjustGeo, entryIdx, entryName, borderReason,
     pmcItems, pmcPrice, pmcCooldownLeft, pmcReason, hirePmc,
     officialReason, officialRequest, officialCooldownLeft, officialChance, officialOrders, officialItemName,
     investReason, requestInvestment, investCooldownLeft, investChance, investAmount, investOrders,
