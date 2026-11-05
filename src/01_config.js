@@ -315,6 +315,17 @@ const CONFIG = {
     }
   },
 
+  // Цивільні колони й біженці (07l_civil.js). ЗАГЛУШКИ.
+  civil: {
+    minColumn: 25,            // менше — люди розходяться самі, колони не видно
+    peoplePerCar: 4,
+    speed: 8,                 // «очок руху» колони за годину (дорога — 1 за гекс)
+    corridorEvacShare: 0.03,  // евакуація під коридором: 3% населення за годину
+    directK: 0.15, indirectK: 0.3,      // загиблих цивільних на 1 бал вогню по гексу з колоною
+    supportHit: 3, supportHitCorridor: 6,
+    repHit: 4, repHitCorridor: 10
+  },
+
   // Рішення (фокуси) фракцій — 07k_decisions.js. ЗАГЛУШКИ: ціни (грн), тривалість (год), пороги.
   decisions: {
     contact:     { money: 300,  hours: 4 },

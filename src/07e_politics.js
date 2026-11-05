@@ -79,6 +79,7 @@ const Politics = (() => {
 
   // ---------------------------------------- цивільні в зоні бою
   function onCombat(state, idx, shooter, fireSoft, indirect) {
+    if (typeof Civil !== 'undefined') Civil.onFire(state, idx, shooter, fireSoft, indirect);
     const m = state.map;
     const sid = m.settlement[idx];
     if (sid == null || sid < 0) return null;
@@ -165,7 +166,7 @@ const Politics = (() => {
       if (fighting) out += totalPop(s) * P().refugeesCombat;
       if (s.damage.housing > 50) out += totalPop(s) * P().refugeesDamage;
       out = Math.round(out);
-      if (out > 0) { removePeople(s, out); s.refugees += out; }
+      if (out > 0) { removePeople(s, out); s.refugees += out; if (typeof Civil !== 'undefined') Civil.spawn(state, s, out, false); }
       // повернення до базових настроїв
       for (const g of GROUPS) for (let f = 0; f < 3; f++) {
         const base = P().baseSupport[g][f];
@@ -810,7 +811,7 @@ const Politics = (() => {
     hourPrisoners(state);
   }
 
-  return {
+  return { removePeople,
     GROUPS, TYPES, init, totalPop, support, groupSupport, nationalSupport, adjustSupport, incomeMult, manpowerMult, onCombat, onCapture,
     recordCasualties, recordCaptured, aid, aidReason, raiseMilitia, militiaReason, propaganda, propagandaReason, propagandaOutrage, homeFactor, GROUP_ADJ, rel, active, allied, sharesIntel, sharesSupply, corridorAt,
     statusText, attackCheck, breakAgreements, propose, proposeReason, respond, describe, dissolveAlliance, incoming,

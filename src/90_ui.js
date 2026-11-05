@@ -275,6 +275,7 @@ const UI = (() => {
     drawMarkers(g, visSet);
     drawUnits(g, vis);
     drawCaches(g, visSet);
+    drawCivilians(g, visSet);
     if (preview && preview.ok && preview.hex != null && !preview.path) drawFireLine(g);
     if (hoverHex >= 0) { const cc = g.center(hoverHex); const [x, y] = toScreen(cc.x, cc.y); hexPath(x, y, s - 1); ctx.strokeStyle = 'rgba(20,20,15,0.6)'; ctx.lineWidth = 1.5; ctx.stroke(); }
     if (selectedHex >= 0) { const cc = g.center(selectedHex); const [x, y] = toScreen(cc.x, cc.y); hexPath(x, y, s - 1.5); ctx.strokeStyle = '#111'; ctx.lineWidth = 2.5; ctx.stroke(); }
@@ -652,6 +653,27 @@ const UI = (() => {
     }
   }
 
+  // Цивільні колони (біженці / евакуація під коридором): сіра плашка з кількістю авто,
+  // зелена рамка — під захистом гуманітарного коридору
+  function drawCivilians(g, visSet) {
+    const s = view.s;
+    if (s < 6) return;
+    const f = pf();
+    for (const c of Civil.columns(state)) {
+      if (!visSet.has(c.idx) || !Civil.visibleTo(state, f, c)) continue;
+      const cc = g.center(c.idx); const [x, y] = toScreen(cc.x, cc.y);
+      const w = Math.max(24, s * 1.5), h = Math.max(11, s * 0.6);
+      const bx = x - w / 2, by = y + s * 0.38;
+      ctx.fillStyle = '#ece9df'; ctx.fillRect(bx, by, w, h);
+      ctx.lineWidth = c.corridor ? 2.5 : 1.2; ctx.strokeStyle = c.corridor ? '#2f8a3a' : '#4a4a44'; ctx.strokeRect(bx, by, w, h);
+      // «машинки»
+      const n = Math.min(3, Civil.cars(c));
+      for (let k = 0; k < n; k++) { const cx = bx + 3 + k * (h * 0.9); ctx.fillStyle = '#5b5b55'; ctx.fillRect(cx, by + h * 0.3, h * 0.7, h * 0.4); }
+      ctx.fillStyle = '#1d1b17'; ctx.font = `600 ${Math.max(7, h * 0.7)}px 'IBM Plex Mono', monospace`; ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+      ctx.fillText(String(c.people), bx + w - 3, by + h / 2 + 0.5);
+    }
+  }
+
   // Місця боїв: «200» і трофеї (лише відомі поточній фракції)
   function drawCaches(g, visSet) {
     const s = view.s;
@@ -965,6 +987,7 @@ const UI = (() => {
     parts.push('рух пішки ' + d.cost('foot'));
     const sel = selectedId != null ? Engine.unitById(state, selectedId) : null;
     if (sel && sel.idx !== i) parts.push(`${d.g.dist(sel.idx, i) * CONFIG.hexMeters} м від ${sel.name}`);
+    for (const c of Civil.columnsAt(state, i)) if (Civil.visibleTo(state, pf(), c)) parts.push(`колона ${c.corridor ? 'евакуації (коридор)' : 'біженців'}: ${c.people} осіб, ≈${Civil.cars(c)} авто — не стріляти`);
     $('hexinfo').textContent = parts.join(' · ');
   }
 

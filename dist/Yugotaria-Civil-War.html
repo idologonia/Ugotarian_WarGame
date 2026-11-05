@@ -682,6 +682,17 @@ const CONFIG = {
     }
   },
 
+  // Цивільні колони й біженці (07l_civil.js). ЗАГЛУШКИ.
+  civil: {
+    minColumn: 25,            // менше — люди розходяться самі, колони не видно
+    peoplePerCar: 4,
+    speed: 8,                 // «очок руху» колони за годину (дорога — 1 за гекс)
+    corridorEvacShare: 0.03,  // евакуація під коридором: 3% населення за годину
+    directK: 0.15, indirectK: 0.3,      // загиблих цивільних на 1 бал вогню по гексу з колоною
+    supportHit: 3, supportHitCorridor: 6,
+    repHit: 4, repHitCorridor: 10
+  },
+
   // Рішення (фокуси) фракцій — 07k_decisions.js. ЗАГЛУШКИ: ціни (грн), тривалість (год), пороги.
   decisions: {
     contact:     { money: 300,  hours: 4 },
@@ -2729,6 +2740,7 @@ const Engine = (() => {
     Recruit.endOfHour(state);
     Foreign.hourForeign(state);
     if (typeof Decisions !== 'undefined') Decisions.hour(state);
+    if (typeof Civil !== 'undefined') Civil.hour(state);
     Politics.endOfHour(state);
 
     // Умовні події — етап 4
@@ -5639,6 +5651,7 @@ const Politics = (() => {
 
   // ---------------------------------------- цивільні в зоні бою
   function onCombat(state, idx, shooter, fireSoft, indirect) {
+    if (typeof Civil !== 'undefined') Civil.onFire(state, idx, shooter, fireSoft, indirect);
     const m = state.map;
     const sid = m.settlement[idx];
     if (sid == null || sid < 0) return null;
@@ -5725,7 +5738,7 @@ const Politics = (() => {
       if (fighting) out += totalPop(s) * P().refugeesCombat;
       if (s.damage.housing > 50) out += totalPop(s) * P().refugeesDamage;
       out = Math.round(out);
-      if (out > 0) { removePeople(s, out); s.refugees += out; }
+      if (out > 0) { removePeople(s, out); s.refugees += out; if (typeof Civil !== 'undefined') Civil.spawn(state, s, out, false); }
       // повернення до базових настроїв
       for (const g of GROUPS) for (let f = 0; f < 3; f++) {
         const base = P().baseSupport[g][f];
@@ -6370,7 +6383,7 @@ const Politics = (() => {
     hourPrisoners(state);
   }
 
-  return {
+  return { removePeople,
     GROUPS, TYPES, init, totalPop, support, groupSupport, nationalSupport, adjustSupport, incomeMult, manpowerMult, onCombat, onCapture,
     recordCasualties, recordCaptured, aid, aidReason, raiseMilitia, militiaReason, propaganda, propagandaReason, propagandaOutrage, homeFactor, GROUP_ADJ, rel, active, allied, sharesIntel, sharesSupply, corridorAt,
     statusText, attackCheck, breakAgreements, propose, proposeReason, respond, describe, dissolveAlliance, incoming,
@@ -8045,6 +8058,124 @@ const Decisions = (() => {
   return { DEFS, list, start, startReason, cancel, hour, fireMult, volCooldownMult, state: st };
 })();
 
+// ---- 07l_civil.js
+// ============================================================================
+// МОДУЛЬ: ЦИВІЛЬНІ КОЛОНИ І БІЖЕНЦІ (запит гравця)
+// Люди, що тікають від боїв і руйнувань, виходять із пункту колоною цивільних авто дорогами
+// до краю карти (за межі зони конфлікту). Колону видно на карті тим, хто бачить її гекс (або
+// на своїй території). Поки діє угода «гуманітарний коридор» для пункту, звідти йде
+// організована евакуація — більше людей за годину, і ці колони ПІД ЗАХИСТОМ (зелений коридор).
+// Обстріл колони вбиває цивільних, б’є по підтримці стрільця серед населення того пункту й по
+// його репутації; обстріл захищеної колони — ще й порушення коридору (як атака в коридорі).
+// ============================================================================
+const Civil = (() => {
+  const CV = () => CONFIG.civil;
+  const g = state => Engine.grid(state);
+
+  function columns(state) { if (!state.civColumns) state.civColumns = []; return state.civColumns; }
+  function columnsAt(state, idx) { return columns(state).filter(c => c.idx === idx && c.people > 0); }
+
+  // Вартість кроку для цивільних авто: дорогою швидко, полем повільно, річка без мосту — ні
+  function stepCost(state, i) {
+    const m = state.map;
+    const k = CONFIG.terrain[m.terrain[i]].key;
+    if (k === 'sea') return Infinity;
+    if (m.river[i] && !m.bridge[i]) return Infinity;
+    if (m.road[i]) return 1;
+    return { plain: 2.5, farmland: 2.5, coast: 2.5, village: 2, city: 2, industrial: 2, forest: 4 }[k] || 6;
+  }
+  // Куди тікати: найближчий (за дорогою) гекс краю карти на суші
+  function escapePath(state, from) {
+    const grid = g(state), N = grid.size;
+    const isEdge = i => { const c = grid.col(i), r = grid.row(i); return c === 0 || r === 0 || c === grid.w - 1 || r === grid.h - 1; };
+    const dist = new Float64Array(N).fill(Infinity), prev = new Int32Array(N).fill(-1);
+    const heap = new MinHeap();
+    dist[from] = 0; heap.push(0, from);
+    let goal = -1;
+    while (heap.size) {
+      const cur = heap.pop();
+      if (isEdge(cur) && cur !== from) { goal = cur; break; }
+      for (let d = 0; d < 6; d++) {
+        const n = grid.neighbor(cur, d); if (n < 0) continue;
+        const c = stepCost(state, n); if (!isFinite(c)) continue;
+        const nd = dist[cur] + c;
+        if (nd < dist[n]) { dist[n] = nd; prev[n] = cur; heap.push(nd, n); }
+      }
+    }
+    if (goal < 0) return [];
+    const path = [];
+    for (let c = goal; c !== from && c >= 0; c = prev[c]) path.push(c);
+    return path.reverse();
+  }
+
+  // Вихід людей із пункту: зливаємо з колоною, що ще поруч, або формуємо нову
+  function spawn(state, s, people, corridor) {
+    people = Math.round(people);
+    if (people <= 0) return null;
+    const near = columns(state).find(c => c.from === s.id && c.corridor === !!corridor && c.people > 0 && g(state).dist(c.idx, s.center) <= 1);
+    if (near) { near.people += people; return near; }
+    if (people < CV().minColumn) return null;
+    const c = { id: (state.nextCivId = (state.nextCivId || 0) + 1), from: s.id, people, idx: s.center, path: escapePath(state, s.center), corridor: !!corridor, killed: 0, turn: state.time.turn };
+    columns(state).push(c);
+    const ctl = s.control;
+    Engine.log(state, `${s.name}: виїжджає колона ${corridor ? 'евакуації (гуманітарний коридор)' : 'біженців'} — ${people} осіб, ≈${cars(c)} цивільних авто.`, 'event', ctl >= 0 ? ctl : null, null, { at: s.center });
+    return c;
+  }
+  function cars(c) { return Math.max(1, Math.ceil(c.people / CV().peoplePerCar)); }
+
+  // Щогодини: евакуація з пунктів під коридором, рух колон, вихід за межі карти
+  function hour(state) {
+    for (const s of state.map.settlements) {
+      if (!s.pop || !Politics.corridorAt(state, s.id)) continue;
+      const n = Math.round(Politics.totalPop(s) * CV().corridorEvacShare);
+      if (n <= 0) continue;
+      Politics.removePeople(s, n); s.refugees += n; s.evacuated = (s.evacuated || 0) + n;
+      spawn(state, s, n, true);
+    }
+    for (const c of columns(state)) {
+      let budget = CV().speed;
+      while (c.path.length && budget > 0) {
+        const cost = stepCost(state, c.path[0]);
+        if (cost > budget && budget < CV().speed) break;
+        budget -= cost; c.idx = c.path.shift();
+      }
+      if (!c.path.length && c.people > 0) {
+        const s = state.map.settlements[c.from];
+        Engine.log(state, `Колона ${c.corridor ? 'евакуації' : 'біженців'} (${s.name}, ${c.people} осіб) покинула зону конфлікту.`, 'event', s.control >= 0 ? s.control : null, null);
+        c.people = 0;
+      }
+    }
+    state.civColumns = columns(state).filter(c => c.people > 0);
+  }
+
+  // Обстріл гекса з колоною
+  function onFire(state, idx, shooter, fireSoft, indirect) {
+    const out = [];
+    for (const c of columnsAt(state, idx)) {
+      const n = Math.min(c.people, Math.max(1, Math.round(fireSoft * (indirect ? CV().indirectK : CV().directK))));
+      c.people -= n; c.killed += n;
+      const s = state.map.settlements[c.from];
+      Politics.adjustSupport(s, shooter, -(c.corridor ? CV().supportHitCorridor : CV().supportHit), null, 'обстріл колони біженців', state);
+      state.diplomacy.reputation[shooter] = Math.max(0, state.diplomacy.reputation[shooter] - (c.corridor ? CV().repHitCorridor : CV().repHit));
+      // зелений коридор: обстріл захищеної колони — порушення угоди
+      if (c.corridor) for (let x = 0; x < 3; x++) {
+        if (x === shooter) continue;
+        const r = Politics.rel(state, shooter, x);
+        const list = r ? r.agreements.filter(a => a.type === 'corridor' && a.terms && a.terms.settlement === c.from && (a.until == null || a.until > state.time.turn)) : [];
+        if (list.length) Politics.breakAgreements(state, shooter, x, list);
+      }
+      Engine.log(state, `ОБСТРІЛЯНО КОЛОНУ ${c.corridor ? 'ЕВАКУАЦІЇ' : 'БІЖЕНЦІВ'} (${s.name}) у ${g(state).label(idx)}: загинули ${n} цивільних. Стріляли — «${CONFIG.factions[shooter].short}».`, 'alert', null, null, { at: idx });
+      out.push({ n, corridor: c.corridor });
+    }
+    state.civColumns = columns(state).filter(c => c.people > 0);
+    return out;
+  }
+  // Хто бачить колону: свій контроль гекса або гекс під спостереженням
+  function visibleTo(state, f, c) { return state.map.control[c.idx] === f || Intel.hexObserved(state, f, c.idx); }
+
+  return { columns, columnsAt, spawn, hour, onFire, visibleTo, cars, escapePath };
+})();
+
 // ---- 08_save.js
 // ============================================================================
 // МОДУЛЬ: ЗБЕРЕЖЕННЯ — СЕРІАЛІЗАЦІЯ, ПЕРЕВІРКА, ВЕРСІЇ, СЛОТИ
@@ -8467,6 +8598,8 @@ const AI = (() => {
       const d = g.dist(u.idx, e.idx);
       if (d > maxR) continue;
       if (!e.visible && (!indirect || level === 'easy' || e.m.age > 2)) continue;
+      // важкий бот не стріляє туди, де колона біженців (удар по підтримці й репутації)
+      if (level === 'hard' && Civil.columnsAt(state, e.idx).length) continue;
       const target = e.visible ? { unitId: e.m.id } : { hex: e.idx };
       cands.push({ e, d, target });
     }
@@ -9260,6 +9393,7 @@ const UI = (() => {
     drawMarkers(g, visSet);
     drawUnits(g, vis);
     drawCaches(g, visSet);
+    drawCivilians(g, visSet);
     if (preview && preview.ok && preview.hex != null && !preview.path) drawFireLine(g);
     if (hoverHex >= 0) { const cc = g.center(hoverHex); const [x, y] = toScreen(cc.x, cc.y); hexPath(x, y, s - 1); ctx.strokeStyle = 'rgba(20,20,15,0.6)'; ctx.lineWidth = 1.5; ctx.stroke(); }
     if (selectedHex >= 0) { const cc = g.center(selectedHex); const [x, y] = toScreen(cc.x, cc.y); hexPath(x, y, s - 1.5); ctx.strokeStyle = '#111'; ctx.lineWidth = 2.5; ctx.stroke(); }
@@ -9637,6 +9771,27 @@ const UI = (() => {
     }
   }
 
+  // Цивільні колони (біженці / евакуація під коридором): сіра плашка з кількістю авто,
+  // зелена рамка — під захистом гуманітарного коридору
+  function drawCivilians(g, visSet) {
+    const s = view.s;
+    if (s < 6) return;
+    const f = pf();
+    for (const c of Civil.columns(state)) {
+      if (!visSet.has(c.idx) || !Civil.visibleTo(state, f, c)) continue;
+      const cc = g.center(c.idx); const [x, y] = toScreen(cc.x, cc.y);
+      const w = Math.max(24, s * 1.5), h = Math.max(11, s * 0.6);
+      const bx = x - w / 2, by = y + s * 0.38;
+      ctx.fillStyle = '#ece9df'; ctx.fillRect(bx, by, w, h);
+      ctx.lineWidth = c.corridor ? 2.5 : 1.2; ctx.strokeStyle = c.corridor ? '#2f8a3a' : '#4a4a44'; ctx.strokeRect(bx, by, w, h);
+      // «машинки»
+      const n = Math.min(3, Civil.cars(c));
+      for (let k = 0; k < n; k++) { const cx = bx + 3 + k * (h * 0.9); ctx.fillStyle = '#5b5b55'; ctx.fillRect(cx, by + h * 0.3, h * 0.7, h * 0.4); }
+      ctx.fillStyle = '#1d1b17'; ctx.font = `600 ${Math.max(7, h * 0.7)}px 'IBM Plex Mono', monospace`; ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+      ctx.fillText(String(c.people), bx + w - 3, by + h / 2 + 0.5);
+    }
+  }
+
   // Місця боїв: «200» і трофеї (лише відомі поточній фракції)
   function drawCaches(g, visSet) {
     const s = view.s;
@@ -9950,6 +10105,7 @@ const UI = (() => {
     parts.push('рух пішки ' + d.cost('foot'));
     const sel = selectedId != null ? Engine.unitById(state, selectedId) : null;
     if (sel && sel.idx !== i) parts.push(`${d.g.dist(sel.idx, i) * CONFIG.hexMeters} м від ${sel.name}`);
+    for (const c of Civil.columnsAt(state, i)) if (Civil.visibleTo(state, pf(), c)) parts.push(`колона ${c.corridor ? 'евакуації (коридор)' : 'біженців'}: ${c.people} осіб, ≈${Civil.cars(c)} авто — не стріляти`);
     $('hexinfo').textContent = parts.join(' · ');
   }
 

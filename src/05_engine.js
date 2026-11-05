@@ -780,6 +780,7 @@ const Engine = (() => {
     Recruit.endOfHour(state);
     Foreign.hourForeign(state);
     if (typeof Decisions !== 'undefined') Decisions.hour(state);
+    if (typeof Civil !== 'undefined') Civil.hour(state);
     Politics.endOfHour(state);
 
     // Умовні події — етап 4

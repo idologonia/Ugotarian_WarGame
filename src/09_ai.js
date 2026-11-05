@@ -191,6 +191,8 @@ const AI = (() => {
       const d = g.dist(u.idx, e.idx);
       if (d > maxR) continue;
       if (!e.visible && (!indirect || level === 'easy' || e.m.age > 2)) continue;
+      // важкий бот не стріляє туди, де колона біженців (удар по підтримці й репутації)
+      if (level === 'hard' && Civil.columnsAt(state, e.idx).length) continue;
       const target = e.visible ? { unitId: e.m.id } : { hex: e.idx };
       cands.push({ e, d, target });
     }
