@@ -25,6 +25,8 @@ const Intel = (() => {
     // в гексі з природним укриттям без руху цієї години, бачить далі.
     if (u.type === 'recon' && u.stance === 'observe' && u.movedTurn !== state.time.turn && (det.concealment[Engine.terrainKey(state, u.idx)] || 0) > 0) r += det.coverObserverBonus;
     if (u.type === 'recon' && u.binoculars) r += det.binocularsBonus;
+    // свій блокпост у гексі — пост спостереження
+    if (Logistics.facilityAt(state, u.idx).some(f => f.type === 'checkpoint' && f.owner === u.faction)) r += CONFIG.engineering.checkpoint.observeBonus;
     if (Engine.isNight(state.time.hour)) r -= det.night.penalty;
     if (u.personnel.fit <= 0 || u.dispersal >= 3) r = 1;
     return Math.max(1, r);

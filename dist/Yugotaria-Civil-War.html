@@ -583,7 +583,11 @@ const CONFIG = {
     // підрозділу сама, не через canEngineer). Ефект: дає захисту в гексі (cover, як бліндаж —
     // будь-кому, хто там стоїть, незалежно від власника) і забирає частину ОР у ворога, що
     // заходить у гекс (своїм — безкоштовно, 07i_mines.js checkTrigger).
-    wire:     { name: 'Єгоза (спіраль АКЛ)', eng: 3, max: 3, cover: 0.08, enemyMpPenalty: 6, actionShare: 0.5 }
+    wire:     { name: 'Єгоза (спіраль АКЛ)', eng: 3, max: 3, cover: 0.08, enemyMpPenalty: 6, actionShare: 0.5 },
+    // Блокпост (запит гравця: «фронт прив’язаний до доріг»): лише в гексі з дорогою. Чужа
+    // колона на ньому зупиняється й втрачає enemyMpPenalty ОР; свій підрозділ у гексі блокпоста —
+    // пост: бачить далі (+observeBonus) і має +cover укриття. Захоплюється/знищується як об’єкт.
+    checkpoint: { name: 'Блокпост', hours: 2, eng: 6, enemyMpPenalty: 8, observeBonus: 2, cover: 0.1 }
   },
   // Мінні поля (07i_mines.js): закладає інженер (engineering.mineAp/mineAt — hours/goods/n/max).
   // Хто наступає на гекс із чужими мінами (свої міни не чіпають) отримує удар по піхоті (АП)
@@ -931,7 +935,8 @@ const CONFIG = {
     // Ефект: підрозділи фракції в радіусі moraleRadius відновлюють мораль швидше (05_engine.js).
     cp:          { name: 'Командний пункт',          short: 'КП',  moraleRadius: 3, moraleBonus: 2 },
     // Аеропорт ДП (запит гравця) — смуга на 3 гекси, вантажні рейси й база БПЛА (07j_air.js)
-    airport:     { name: 'Аеропорт',                 short: 'АЕР' }
+    airport:     { name: 'Аеропорт',                 short: 'АЕР' },
+    checkpoint:  { name: 'Блокпост',                 short: 'БП' }
   },
   economy: {
     startMoney: [6000, 2500, 2500],
@@ -2436,7 +2441,7 @@ const Engine = (() => {
           return { moved, spent, reason: `підрозділ наштовхнувся на мінне поле в ${g.label(next)} — техніку знищено.`, contact, mined: true };
         }
         o.status = 'contact';
-        reason = `мінне поле в ${g.label(next)} — рух зупинено.`;
+        reason = `перешкода в ${g.label(next)}: ${mineHit.lines.join('; ')}.`;
         break;
       }
       // Засідка: хтось у стансі «Засідка» саме тепер побачив нас і стріляє першим
@@ -2826,6 +2831,8 @@ const Intel = (() => {
     // в гексі з природним укриттям без руху цієї години, бачить далі.
     if (u.type === 'recon' && u.stance === 'observe' && u.movedTurn !== state.time.turn && (det.concealment[Engine.terrainKey(state, u.idx)] || 0) > 0) r += det.coverObserverBonus;
     if (u.type === 'recon' && u.binoculars) r += det.binocularsBonus;
+    // свій блокпост у гексі — пост спостереження
+    if (Logistics.facilityAt(state, u.idx).some(f => f.type === 'checkpoint' && f.owner === u.faction)) r += CONFIG.engineering.checkpoint.observeBonus;
     if (Engine.isNight(state.time.hour)) r -= det.night.penalty;
     if (u.personnel.fit <= 0 || u.dispersal >= 3) r = 1;
     return Math.max(1, r);
@@ -3212,6 +3219,7 @@ const Combat = (() => {
     // Єгоза (запит гравця): суто місцевий фактор, як і бліндаж — захищає будь-кого в гексі,
     // незалежно від того, чия фракція її ставила (сукупний рівень усіх власників у гексі).
     if (!opts.advancing && state.map.wireLevel) c += (state.map.wireLevel[u.idx] || 0) * CONFIG.engineering.wire.cover;
+    if (!opts.advancing && Logistics.facilityAt(state, u.idx).some(f => f.type === 'checkpoint' && f.owner === u.faction)) c += CONFIG.engineering.checkpoint.cover;
     return Math.min(0.85, c + fort * C().fortCoverPerLevel * (opts.indirect ? C().indirectFortFactor : 1));
   }
 
@@ -6425,6 +6433,10 @@ const Field = (() => {
       if (m.river[n] && m.bridge[n]) out.push({ type: 'demolish', target: n, label: `${E().demolish.name} у ${grid.label(n)}` });
     }
     if (m.river[u.idx] && m.bridge[u.idx]) out.push({ type: 'demolish', target: u.idx, label: `${E().demolish.name} під собою` });
+    // Блокпост — лише на дорозі, один на гекс
+    if (m.road[u.idx] > 0 && !Logistics.facilities(state).some(f => f.type === 'checkpoint' && f.idx === u.idx && !f.destroyed)) {
+      out.push({ type: 'checkpoint', target: u.idx, label: `${E().checkpoint.name} у ${grid.label(u.idx)}` });
+    }
     if ((m.shelter[u.idx] || 0) < E().shelter.max) out.push({ type: 'shelter', target: u.idx, label: `${E().shelter.name} у ${grid.label(u.idx)} (рівень ${(m.shelter[u.idx] || 0) + 1})` });
     // Командний пункт — лише там, де вже є бліндаж, і лише один свій на гекс
     if ((m.shelter[u.idx] || 0) > 0 && !Logistics.facilities(state).some(f => f.type === 'cp' && f.idx === u.idx && f.owner === u.faction && !f.destroyed)) {
@@ -6493,6 +6505,7 @@ const Field = (() => {
       case 'mineAt': Mines.lay(state, p.faction, p.target, 'at', E().mineAt.n); break;
       case 'clearMines': Mines.clear(state, p.target, E().clearMines.cleared); break;
       case 'cp': Logistics.makeFacility(state, 'cp', p.target, p.faction, `Командний пункт (${grid.label(p.target)})`); break;
+      case 'checkpoint': Logistics.makeFacility(state, 'checkpoint', p.target, p.faction, `Блокпост (${grid.label(p.target)})`); break;
       case 'restore': {
         const c = Loot.cacheAt(state, p.at, false);
         const v = c && c.vehicles && c.vehicles[p.target];
@@ -7598,6 +7611,13 @@ const Mines = (() => {
           if (malus > 0) { u.mp -= malus; lines.push(`«Єгоза» (рівень ${lvl}): витрачено додатково ${Engine.fmt(malus)} ОР на подолання загородження`); }
         }
       }
+    }
+    // Блокпост противника: колона зупиняється на перевірці/під вогнем поста
+    for (const cp of Logistics.facilityAt(state, u.idx)) {
+      if (cp.type !== 'checkpoint' || cp.owner === u.faction || cp.owner < 0 || Politics.allied(state, cp.owner, u.faction)) continue;
+      const malus = Math.min(u.mp, E().checkpoint.enemyMpPenalty);
+      u.mp -= malus;
+      lines.push(`блокпост «${CONFIG.factions[cp.owner].short}» — рух зупинено${malus > 0 ? `, витрачено ${Engine.fmt(malus)} ОР` : ''}`);
     }
     if (!lines.length) return null;
     const text = `ПЕРЕШКОДА: ${u.name} у ${grid.label(u.idx)} — ${lines.join('; ')}.`;

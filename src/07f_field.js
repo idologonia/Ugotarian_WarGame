@@ -50,6 +50,10 @@ const Field = (() => {
       if (m.river[n] && m.bridge[n]) out.push({ type: 'demolish', target: n, label: `${E().demolish.name} у ${grid.label(n)}` });
     }
     if (m.river[u.idx] && m.bridge[u.idx]) out.push({ type: 'demolish', target: u.idx, label: `${E().demolish.name} під собою` });
+    // Блокпост — лише на дорозі, один на гекс
+    if (m.road[u.idx] > 0 && !Logistics.facilities(state).some(f => f.type === 'checkpoint' && f.idx === u.idx && !f.destroyed)) {
+      out.push({ type: 'checkpoint', target: u.idx, label: `${E().checkpoint.name} у ${grid.label(u.idx)}` });
+    }
     if ((m.shelter[u.idx] || 0) < E().shelter.max) out.push({ type: 'shelter', target: u.idx, label: `${E().shelter.name} у ${grid.label(u.idx)} (рівень ${(m.shelter[u.idx] || 0) + 1})` });
     // Командний пункт — лише там, де вже є бліндаж, і лише один свій на гекс
     if ((m.shelter[u.idx] || 0) > 0 && !Logistics.facilities(state).some(f => f.type === 'cp' && f.idx === u.idx && f.owner === u.faction && !f.destroyed)) {
@@ -118,6 +122,7 @@ const Field = (() => {
       case 'mineAt': Mines.lay(state, p.faction, p.target, 'at', E().mineAt.n); break;
       case 'clearMines': Mines.clear(state, p.target, E().clearMines.cleared); break;
       case 'cp': Logistics.makeFacility(state, 'cp', p.target, p.faction, `Командний пункт (${grid.label(p.target)})`); break;
+      case 'checkpoint': Logistics.makeFacility(state, 'checkpoint', p.target, p.faction, `Блокпост (${grid.label(p.target)})`); break;
       case 'restore': {
         const c = Loot.cacheAt(state, p.at, false);
         const v = c && c.vehicles && c.vehicles[p.target];

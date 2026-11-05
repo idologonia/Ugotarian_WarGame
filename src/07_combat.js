@@ -77,6 +77,7 @@ const Combat = (() => {
     // Єгоза (запит гравця): суто місцевий фактор, як і бліндаж — захищає будь-кого в гексі,
     // незалежно від того, чия фракція її ставила (сукупний рівень усіх власників у гексі).
     if (!opts.advancing && state.map.wireLevel) c += (state.map.wireLevel[u.idx] || 0) * CONFIG.engineering.wire.cover;
+    if (!opts.advancing && Logistics.facilityAt(state, u.idx).some(f => f.type === 'checkpoint' && f.owner === u.faction)) c += CONFIG.engineering.checkpoint.cover;
     return Math.min(0.85, c + fort * C().fortCoverPerLevel * (opts.indirect ? C().indirectFortFactor : 1));
   }
 

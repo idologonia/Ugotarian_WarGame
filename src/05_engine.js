@@ -492,7 +492,7 @@ const Engine = (() => {
           return { moved, spent, reason: `підрозділ наштовхнувся на мінне поле в ${g.label(next)} — техніку знищено.`, contact, mined: true };
         }
         o.status = 'contact';
-        reason = `мінне поле в ${g.label(next)} — рух зупинено.`;
+        reason = `перешкода в ${g.label(next)}: ${mineHit.lines.join('; ')}.`;
         break;
       }
       // Засідка: хтось у стансі «Засідка» саме тепер побачив нас і стріляє першим

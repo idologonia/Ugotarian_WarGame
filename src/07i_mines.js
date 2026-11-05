@@ -133,6 +133,13 @@ const Mines = (() => {
         }
       }
     }
+    // Блокпост противника: колона зупиняється на перевірці/під вогнем поста
+    for (const cp of Logistics.facilityAt(state, u.idx)) {
+      if (cp.type !== 'checkpoint' || cp.owner === u.faction || cp.owner < 0 || Politics.allied(state, cp.owner, u.faction)) continue;
+      const malus = Math.min(u.mp, E().checkpoint.enemyMpPenalty);
+      u.mp -= malus;
+      lines.push(`блокпост «${CONFIG.factions[cp.owner].short}» — рух зупинено${malus > 0 ? `, витрачено ${Engine.fmt(malus)} ОР` : ''}`);
+    }
     if (!lines.length) return null;
     const text = `ПЕРЕШКОДА: ${u.name} у ${grid.label(u.idx)} — ${lines.join('; ')}.`;
     Engine.log(state, text, 'alert', u.faction, [u.faction], { at: u.idx, uid: u.id });

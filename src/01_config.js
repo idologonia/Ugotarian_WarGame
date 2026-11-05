@@ -216,7 +216,11 @@ const CONFIG = {
     // підрозділу сама, не через canEngineer). Ефект: дає захисту в гексі (cover, як бліндаж —
     // будь-кому, хто там стоїть, незалежно від власника) і забирає частину ОР у ворога, що
     // заходить у гекс (своїм — безкоштовно, 07i_mines.js checkTrigger).
-    wire:     { name: 'Єгоза (спіраль АКЛ)', eng: 3, max: 3, cover: 0.08, enemyMpPenalty: 6, actionShare: 0.5 }
+    wire:     { name: 'Єгоза (спіраль АКЛ)', eng: 3, max: 3, cover: 0.08, enemyMpPenalty: 6, actionShare: 0.5 },
+    // Блокпост (запит гравця: «фронт прив’язаний до доріг»): лише в гексі з дорогою. Чужа
+    // колона на ньому зупиняється й втрачає enemyMpPenalty ОР; свій підрозділ у гексі блокпоста —
+    // пост: бачить далі (+observeBonus) і має +cover укриття. Захоплюється/знищується як об’єкт.
+    checkpoint: { name: 'Блокпост', hours: 2, eng: 6, enemyMpPenalty: 8, observeBonus: 2, cover: 0.1 }
   },
   // Мінні поля (07i_mines.js): закладає інженер (engineering.mineAp/mineAt — hours/goods/n/max).
   // Хто наступає на гекс із чужими мінами (свої міни не чіпають) отримує удар по піхоті (АП)
@@ -564,7 +568,8 @@ const CONFIG = {
     // Ефект: підрозділи фракції в радіусі moraleRadius відновлюють мораль швидше (05_engine.js).
     cp:          { name: 'Командний пункт',          short: 'КП',  moraleRadius: 3, moraleBonus: 2 },
     // Аеропорт ДП (запит гравця) — смуга на 3 гекси, вантажні рейси й база БПЛА (07j_air.js)
-    airport:     { name: 'Аеропорт',                 short: 'АЕР' }
+    airport:     { name: 'Аеропорт',                 short: 'АЕР' },
+    checkpoint:  { name: 'Блокпост',                 short: 'БП' }
   },
   economy: {
     startMoney: [6000, 2500, 2500],
