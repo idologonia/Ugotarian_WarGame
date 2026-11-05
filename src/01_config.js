@@ -311,6 +311,19 @@ const CONFIG = {
     }
   },
 
+  // Рішення (фокуси) фракцій — 07k_decisions.js. ЗАГЛУШКИ: ціни (грн), тривалість (год), пороги.
+  decisions: {
+    contact:     { money: 300,  hours: 4 },
+    jointHQ:     { money: 800,  hours: 8,  socShare: 0.45, geoPenalty: 10, fireBonus: 0.1 },
+    unitedFront: { money: 1500, hours: 12, allianceHours: 24, volunteers: 2 },
+    amnesty:     { money: 500,  hours: 6,  killed: 20 },
+    russianArmy: { money: 3000, hours: 10, geo: 70, units: ['inf_platoon', 'inf_platoon', 'veh_mtlb', 'arty_team', 'veh_ural'] },
+    mobilization:{ hours: 6, below: 20, manpower: 30 },
+    natoAir:     { money: 1000, hours: 8,  geo: 55 },
+    westMission: { money: 1200, hours: 12, geo: 75 },
+    diasporaMob: { money: 600,  hours: 6,  support: 55, halfHours: 24, cooldown: 48 }
+  },
+
   // Аеропорт і повітряна розвідка ДП (запит гравця). ЗАГЛУШКИ чисел.
   air: {
     airportName: 'Аеропорт «НАТО»',

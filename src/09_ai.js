@@ -299,8 +299,28 @@ const AI = (() => {
     }
   }
 
+  // Рішення (фокуси): важкий бот бере перше доступне за пріоритетом своєї сторони,
+  // лишаючи запас коштів на армію
+  const DEC_PRIO = {
+    0: ['mobilization', 'russianArmy', 'amnesty2', 'amnesty1'],
+    1: ['natoAir', 'contact', 'jointHQ', 'westMission', 'unitedFront'],
+    2: ['contact', 'jointHQ', 'diasporaMob', 'unitedFront']
+  };
+  function takeDecision(ctx) {
+    const { state, f } = ctx;
+    if (Decisions.state(state).active[f]) return;
+    const items = Decisions.list(state, f);
+    const money = Logistics.ensureEconomy(state)[f].money;
+    for (const id of DEC_PRIO[f]) {
+      const d = items.find(x => x.id === id);
+      if (!d || d.status !== 'available' || money - d.cost < 1000) continue;
+      if (ok(Decisions.start(state, f, id))) { ctx.stats.other++; return; }
+    }
+  }
+
   function economy(ctx) {
     const { state, f, g } = ctx;
+    safe(ctx, 'рішення', () => takeDecision(ctx));
     safe(ctx, 'експорт', () => exportSurplus(ctx));
     const eco = Logistics.ensureEconomy(state)[f];
     const stores = Logistics.facilities(state).filter(x => Logistics.isStore(x) && x.owner === f && !x.destroyed);

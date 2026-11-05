@@ -630,6 +630,8 @@ const Combat = (() => {
     const dCanReply = (Engine.canAct(d) && weaponsInRange(d, pv.dist, false, { state, targetArmor: aArmor }).length > 0) || Transport.passengers(state, d).some(p => p.personnel.fit > 0 && weaponsInRange(p, pv.dist, false, { state, targetArmor: aArmor }).length > 0);
     const dIntensity = 'normal';
     const order = ambush ? 'attacker' : (d.stance === 'defend' && d.fort > 0 ? 'defender' : 'simultaneous');
+    // «Спільний штаб» повстанців (07k_decisions.js): +вогонь по СВ поруч із союзником
+    const jm = typeof Decisions !== 'undefined' ? Decisions.fireMult(state, a, d) : 1;
     const fireLines = [];
     const extraLines = [];
     const aHit = a.embarked != null ? (Engine.unitById(state, a.embarked) || a) : a;
@@ -639,14 +641,14 @@ const Combat = (() => {
     const rollD = combatRoll(state, d.id, a.id, turn);
     const fireDesc = (u, f) => `${u.name} (${f.intensity.toLowerCase()} вогонь, кидок ×${F(f.roll)}): ${f.used.filter(x => x.eff > 0 || x.at > 0).map(x => `${x.model} ×${x.n} → ${F(x.eff)}${x.at > 0 && isVehicle(d) ? ` / ПТ ${F(x.at)}` : ''}`).join('; ') || 'без ефекту'}. Сумарна ефективність ${F(f.soft)}${f.at > 0 ? `, протитанкова ${F(f.at)}` : ''}. Витрачено: ${ammoText(f.use)}.`;
     if (order === 'simultaneous') {
-      fireA = groupFire(state, a, pv.dist, pv.intensity, { targetArmor: dArmor, roll: rollA });
+      fireA = groupFire(state, a, pv.dist, pv.intensity, { mult: jm, targetArmor: dArmor, roll: rollA });
       fireD = dCanReply ? groupFire(state, d, pv.dist, dIntensity, { targetArmor: aArmor, roll: rollD }) : null;
       fireLines.push('Перший вогонь: обидві сторони відкривають вогонь одночасно.');
       resD = hitUnit(state, d, fireA, dCover, extraLines);
       if (fireD) resA = hitUnit(state, aHit, fireD, aHitCover, extraLines);
     } else if (order === 'attacker') {
       const mA = prepared ? cfg.ambushPositionAttacker : cfg.ambushAttacker, mD = prepared ? cfg.ambushPositionDefender : cfg.ambushDefender;
-      fireA = groupFire(state, a, pv.dist, pv.intensity, { mult: mA, targetArmor: dArmor, roll: rollA });
+      fireA = groupFire(state, a, pv.dist, pv.intensity, { mult: mA * jm, targetArmor: dArmor, roll: rollA });
       fireLines.push(`Перший вогонь за атакуючим (${prepared ? 'підготовлена засідка' : 'засідка'}, вогонь ×${mA}).`);
       resD = hitUnit(state, d, fireA, dCover, extraLines);
       if (dCanReply && d.personnel.fit > 0) {
@@ -659,7 +661,7 @@ const Combat = (() => {
       fireLines.push(`Перший вогонь за обороною: ${d.name} з підготовлених позицій відкриває вогонь першим.`);
       if (fireD) resA = hitUnit(state, aHit, fireD, aHitCover, extraLines);
       if (a.personnel.fit > 0) {
-        fireA = groupFire(state, a, pv.dist, pv.intensity, { targetArmor: dArmor, roll: rollA });
+        fireA = groupFire(state, a, pv.dist, pv.intensity, { mult: jm, targetArmor: dArmor, roll: rollA });
         resD = hitUnit(state, d, fireA, dCover, extraLines);
       }
     }

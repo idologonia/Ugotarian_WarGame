@@ -294,7 +294,10 @@ const Foreign = (() => {
 
   // ---------------------------------------------------- добровольці (подія + спроба закликати)
   function lastVolTurn(state) { if (!state.volLast) state.volLast = {}; return state.volLast; }
-  function volCooldownHours(state, f) { return Math.round(relLerp(state, f, G().volunteers.callCooldownAt0, G().volunteers.callCooldownAt100)); }
+  function volCooldownHours(state, f) {
+    const m = typeof Decisions !== 'undefined' ? Decisions.volCooldownMult(state, f) : 1;   // «Мобілізація діаспори» — удвічі коротше
+    return Math.round(relLerp(state, f, G().volunteers.callCooldownAt0, G().volunteers.callCooldownAt100) * m);
+  }
   function volCooldownLeft(state, f) {
     const last = lastVolTurn(state)[f];
     return last == null ? 0 : Math.max(0, volCooldownHours(state, f) - (state.time.turn - last));
@@ -420,7 +423,7 @@ const Foreign = (() => {
     pmcItems, pmcPrice, pmcCooldownLeft, pmcReason, hirePmc,
     officialReason, officialRequest, officialCooldownLeft, officialChance, officialOrders, officialItemName,
     investReason, requestInvestment, investCooldownLeft, investChance, investAmount, investOrders,
-    volCost, volCooldownHours, volCooldownLeft, callReason, callVolunteers, onLiberate,
+    volCost, volCooldownHours, volCooldownLeft, callReason, callVolunteers, queueVolunteers, onLiberate,
     queue, hourForeign
   };
 })();

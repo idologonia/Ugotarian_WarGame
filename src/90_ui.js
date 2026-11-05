@@ -2063,13 +2063,31 @@ const UI = (() => {
   }
 
   let polTab = 'pop';
+  // Рішення (фокуси): картки з умовами, ціною, тривалістю й станом
+  function decisionsHtml(f) {
+    const items = Decisions.list(state, f);
+    const can = commandable();
+    const act = Decisions.state(state).active[f];
+    const STATUS = { available: 'Доступне', active: 'Виконується', done: 'Виконано', locked: 'Умови не виконано', excluded: 'Обрано інший шлях' };
+    const card = d => `<div class="dec ${d.status}">
+      <div class="dec-head"><b>${esc(d.name)}</b><span class="dec-st">${STATUS[d.status]}${d.note ? ` · ${esc(d.note)}` : ''}</span></div>
+      <p>${esc(d.desc)}</p>
+      ${d.reqs.length ? `<ul class="dec-req">${d.reqs.map(r => `<li class="${r.ok ? 'ok' : 'no'}">${r.ok ? '✓' : '✗'} ${esc(r.text)}</li>`).join('')}</ul>` : ''}
+      <div class="dec-foot"><span>${d.cost ? `${d.cost} грн` : 'без коштів'} · ${d.hours} год</span>
+        ${d.status === 'available' ? `<button type="button" class="primary mini" data-dec="${d.id}" ${can && !act ? '' : `disabled title="${esc(!can ? 'Не ваш хід' : 'Уже виконується інше рішення')}"`}>Розпочати</button>` : ''}
+        ${d.status === 'active' ? `<button type="button" class="mini" data-dec="__cancel" ${can ? '' : 'disabled'}>Скасувати</button>` : ''}
+      </div></div>`;
+    return `<p class="notice">Рішення — курс вашої сторони. Одночасно виконується одне; гроші сплачуються на початку, наслідки — після завершення. Частина рішень взаємовиключні.</p>
+      <div class="dec-list">${items.map(card).join('')}</div>`;
+  }
   const formSel = {};
   function openPolitics(tab) {
     if (handover || !state) return;
     if (tab) polTab = tab;
     const f = pf();
     const P = CONFIG.population;
-    const tabs = [['pop', 'Населення'], ['dip', 'Дипломатія' + (Politics.incoming(state, f).length ? ` (${Politics.incoming(state, f).length})` : '')], ['goals', 'Цілі'], ['events', 'Події']];
+    const decAct = Decisions.state(state).active[f];
+    const tabs = [['pop', 'Населення'], ['dip', 'Дипломатія' + (Politics.incoming(state, f).length ? ` (${Politics.incoming(state, f).length})` : '')], ['dec', 'Рішення' + (decAct ? ' ●' : '')], ['goals', 'Цілі'], ['events', 'Події']];
     if (state.campaign.over) tabs.push(['chron', 'Хроніка']);
     let body = '';
     if (polTab === 'pop') {
@@ -2103,6 +2121,8 @@ const UI = (() => {
         <ul class="list" style="margin-top:6px">${Object.values(Politics.TYPES).map(t => `<li><span>${esc(t.name)}</span><span class="muted" style="font-family:var(--font-ui)">${esc(t.desc)}</span></li>`).join('')}</ul>
       </div>
       <div><h3 style="margin:0 0 6px;font-size:13px">Історія</h3>${state.diplomacy.history.length ? `<ul>${state.diplomacy.history.slice(-12).reverse().map(h => `<li>${esc(Engine.timeLabel(h))}: ${esc(h.text)}</li>`).join('')}</ul>` : '<p class="notice">Угод ще не було.</p>'}</div>`;
+    } else if (polTab === 'dec') {
+      body = decisionsHtml(f);
     } else if (polTab === 'goals') {
       const sc = Politics.scores(state);
       const mine = sc[f];
@@ -2117,6 +2137,11 @@ const UI = (() => {
     } else if (polTab === 'chron') body = chronicleHtml();
     openModal('Політика', `<div class="ptabs">${tabs.map(([k, n]) => `<button type="button" data-ptab="${k}" aria-pressed="${polTab === k}">${esc(n)}</button>`).join('')}</div>${body}`, root => {
       root.querySelectorAll('[data-ptab]').forEach(b => b.onclick = () => openPolitics(b.dataset.ptab));
+      root.querySelectorAll('[data-dec]').forEach(b => b.onclick = () => {
+        const r = b.dataset.dec === '__cancel' ? Decisions.cancel(state, f) : Decisions.start(state, f, b.dataset.dec);
+        if (!r.ok) toast(r.reason, true); else toast(b.dataset.dec === '__cancel' ? 'Рішення скасовано.' : 'Рішення розпочато.');
+        renderAll(); openPolitics('dec');
+      });
       root.querySelectorAll('[data-pol]').forEach(b => b.onclick = () => {
         let r;
         const k = b.dataset.pol;
