@@ -8718,9 +8718,28 @@ const AI = (() => {
     }
   }
 
+  // Зовнішня допомога: інвестиції (повстанці — безкоштовна заявка), добровольці, ПВК при
+  // достатку коштів, закупівлі СВ у РФ
+  function foreignAid(ctx) {
+    const { state, f } = ctx;
+    const eco = Logistics.ensureEconomy(state)[f];
+    if (f !== 0 && !Foreign.investReason(state, f) && ok(Foreign.requestInvestment(state, f))) ctx.stats.other++;
+    if (!Foreign.callReason(state, f) && eco.money - Foreign.volCost(state, f) > 1500 && ok(Foreign.callVolunteers(state, f))) ctx.stats.other++;
+    const stores = Logistics.facilities(state).filter(x => Logistics.isStore(x) && x.owner === f && !x.destroyed)
+      .sort((a, b) => nearestEnemyDist(ctx, b.idx) - nearestEnemyDist(ctx, a.idx) || a.id - b.id);
+    if (!stores.length) return;
+    if (eco.money > 6000 && !Foreign.pmcReason(state, f, stores[0], 'platoon') && ok(Foreign.hirePmc(state, f, stores[0].id, 'platoon'))) ctx.stats.other++;
+    if (f === 0 && eco.money > 4000 && Foreign.officialCooldownLeft(state, 0) === 0) {
+      const fuel = stores.reduce((a, x) => a + (x.stock.goods.fuel || 0), 0);
+      const key = fuel < 2000 ? 'fuel' : '762s';
+      if (!Foreign.officialReason(state, 0, key, 2, stores[0]) && ok(Foreign.officialRequest(state, 0, key, 2, stores[0].id))) ctx.stats.other++;
+    }
+  }
+
   function economy(ctx) {
     const { state, f, g } = ctx;
     safe(ctx, 'рішення', () => takeDecision(ctx));
+    safe(ctx, 'допомога', () => foreignAid(ctx));
     safe(ctx, 'експорт', () => exportSurplus(ctx));
     const eco = Logistics.ensureEconomy(state)[f];
     const stores = Logistics.facilities(state).filter(x => Logistics.isStore(x) && x.owner === f && !x.destroyed);
@@ -8963,7 +8982,8 @@ const AI = (() => {
       if (safe(ctx, 'посадка', () => rideIfFar(ctx, u, s.s.center))) continue;
       const dist = g.dist(u.idx, s.s.center);
       if (wait && dist <= stageR + 1) {
-        if (!u.order) hold(ctx, u);
+        // чекаючи підкріплень біля дороги — засідка на шляху противника
+        if (!u.order) hold(ctx, u, ambushSpot(ctx, u) ? 'ambush' : 'defend');
         continue;
       }
       if (wait || (dist > stageR + 1 && known > 0)) {
@@ -8981,12 +9001,124 @@ const AI = (() => {
     }
   }
 
+  // Засідка має сенс біля дороги, коли відомий противник неподалік, але ще не впритул
+  function ambushSpot(ctx, u) {
+    const { state, g } = ctx;
+    if (Transport.isVehicle(u) || Combat.hasIndirect(u)) return false;
+    const road = state.map.road[u.idx] > 0 || [0, 1, 2, 3, 4, 5].some(d => { const n = g.neighbor(u.idx, d); return n >= 0 && state.map.road[n] > 0; });
+    const d = nearestEnemyDist(ctx, u.idx);
+    return road && d >= 2 && d <= 6;
+  }
+
+  const OUTSIDE = ['ammo_plant', 'arms_plant', 'fieldDepot', 'airport', 'checkpoint', 'repair_base', 'depot'];
+  function facilities(ctx, pool) {
+    const { state, g, f } = ctx;
+    const all = Logistics.facilities(state).filter(x => !x.destroyed && OUTSIDE.includes(x.type) && state.map.settlement[x.idx] < 0);
+    // охорона своїх під загрозою
+    for (const fa of all.filter(x => x.owner === f)) {
+      const threat = ctx.enemies.filter(e => g.dist(e.idx, fa.idx) <= 4);
+      if (!threat.length) continue;
+      if (state.units.some(u => u.faction === f && u.idx === fa.idx && u.personnel.fit > 0)) continue;
+      const u = [...pool].filter(x => g.dist(x.idx, fa.idx) <= 8).sort((a, b) => g.dist(a.idx, fa.idx) - g.dist(b.idx, fa.idx) || a.id - b.id)[0];
+      if (!u) continue;
+      pool.delete(u);
+      if (Engine.knownForeignHexes(state, f).has(fa.idx)) closeIn(ctx, u, threat, new Set());
+      else if (!moveTo(ctx, u, fa.idx) && u.idx === fa.idx) hold(ctx, u);
+    }
+    // рейди: до 2 малих груп на чужі/нічийні об’єкти без видимої охорони
+    const known = new Set(Logistics.known(state, f).map(x => x.id));
+    const targets = all.filter(x => known.has(x.id) && x.owner !== f && (x.owner === -1 || !Politics.allied(state, f, x.owner)));
+    let raids = 0;
+    for (const fa of targets.sort((a, b) => a.id - b.id)) {
+      if (raids >= 2) break;
+      const guard = ctx.enemies.filter(e => g.dist(e.idx, fa.idx) <= 2).reduce((a, e) => a + e.pow, 0);
+      const cands = [...pool].filter(u => g.dist(u.idx, fa.idx) <= 12 && power(u) >= Math.max(2.5, guard * 1.3) && role(u) !== 'armor')
+        .sort((a, b) => g.dist(a.idx, fa.idx) - g.dist(b.idx, fa.idx) || a.id - b.id);
+      const u = cands[0];
+      if (!u) continue;
+      pool.delete(u); raids++;
+      if (u.idx === fa.idx) {
+        if (fa.owner === -1 && !Logistics.claimReason(state, u, fa) && ok(Logistics.claimFacility(state, u.id, fa.id))) ctx.stats.other++;
+        else hold(ctx, u);
+      } else if (Engine.knownForeignHexes(state, f).has(fa.idx)) {
+        closeIn(ctx, u, ctx.enemies.filter(e => e.idx === fa.idx), new Set());
+      } else moveTo(ctx, u, fa.idx);
+    }
+  }
+
+  // Інженери: блокпост на дорозі на підступах до свого пункту, звідки найближче до ворога
+  function buildCheckpoint(ctx, u) {
+    const { state, g, f } = ctx;
+    if (u.project) return true;
+    const mine = Logistics.facilities(state).filter(x => x.type === 'checkpoint' && x.owner === f && !x.destroyed);
+    if (mine.length >= 3) return false;
+    if (state.map.road[u.idx] > 0 && state.map.settlement[u.idx] < 0 && state.map.control[u.idx] === f && !mine.some(x => g.dist(x.idx, u.idx) < 4)
+      && nearestEnemyDist(ctx, u.idx) >= 3 && Field.options(state, u).some(o => o.type === 'checkpoint')) {
+      const r = Field.startProject(state, u.id, 'checkpoint', u.idx);
+      if (ok(r)) { ctx.stats.other++; return true; }
+      return false;
+    }
+    // місце: дорога 2–4 гекси за межею свого пункту, ближче до ворожих пунктів; обране місце
+    // пам’ятаємо кілька годин, щоб інженери не бігали туди-сюди
+    const enemyTowns = ctx.settlements.filter(x => !x.friendly);
+    if (!enemyTowns.length) return false;
+    const t = ctx.mem.tasks['cp' + u.id];
+    if (t && state.time.turn - t.turn < 6 && state.map.control[t.idx] === f && nearestEnemyDist(ctx, t.idx) >= 3 && !mine.some(x => g.dist(x.idx, t.idx) < 4)) return moveTo(ctx, u, t.idx);
+    let best = -1, bs = Infinity;
+    for (const s of ctx.settlements.filter(x => x.mine)) {
+      for (const i of g.within(s.s.center, s.radius + 5)) {
+        if (!state.map.road[i] || state.map.settlement[i] >= 0 || state.map.control[i] !== f) continue;
+        const dEdge = g.dist(i, s.s.center) - s.radius;
+        if (dEdge < 2 || dEdge > 4 || mine.some(x => g.dist(x.idx, i) < 4)) continue;
+        const sc = Math.min(...enemyTowns.map(e => g.dist(i, e.s.center))) + g.dist(u.idx, i) * 0.2;
+        if (sc < bs) { bs = sc; best = i; }
+      }
+    }
+    if (best < 0) return false;
+    ctx.mem.tasks['cp' + u.id] = { idx: best, turn: state.time.turn };
+    return moveTo(ctx, u, best);
+  }
+
+  // Гаубиця Д-30 (сама майже не рухається): тягач везе її на позицію в межах дальності до цілі
+  function towArtillery(ctx, u, front) {
+    const { state, g, f } = ctx;
+    const range = Math.floor(Combat.maxRange(u, true, state) / CONFIG.hexMeters);
+    if (g.dist(u.idx, front) <= range - 1) return false;
+    const tows = state.units.filter(v => v.faction === f && Transport.isVehicle(v) && role(v) === 'transport' && Engine.canAct(v) && !Transport.passengers(state, v).length && Transport.capacity(v) >= Transport.persons(u));
+    const here = tows.find(v => v.idx === u.idx);
+    if (here) {
+      let drop = null, bs = Infinity;
+      for (const i of g.within(front, range - 1)) {
+        const d = g.dist(i, front);
+        if (d < range - 5 || nearestEnemyDist(ctx, i) < 5 || !Engine.hexPassable(state, Engine.moveClass(here), i) || state.map.control[i] !== f) continue;
+        const sc = g.dist(here.idx, i);
+        if (sc < bs) { bs = sc; drop = i; }
+      }
+      if (drop == null || !Engine.previewMove(state, here.id, drop).ok) return false;
+      if (u.deployed) u.deployed = false;
+      if (!ok(Transport.board(state, u.id, here.id))) return false;
+      ctx.mem.tasks[here.id] = { drop };
+      ctx.stats.other++;
+      driveVehicle(ctx, here);
+      return true;
+    }
+    const v = tows.sort((a, b) => (a.type === 'veh_ural' ? 0 : 1) - (b.type === 'veh_ural' ? 0 : 1) || g.dist(a.idx, u.idx) - g.dist(b.idx, u.idx))[0];
+    if (v) ctx.towCall = { vehicle: v.id, idx: u.idx };
+    return false;
+  }
+
   function militaryHard(ctx) {
     const { state, g, f } = ctx;
     const units = ctx.own.filter(u => u.embarked == null).sort((a, b) => a.id - b.id);
     const done = new Set();
     const mark = u => done.add(u.id);
 
+    // 0. Розвідувальний БПЛА — над поточною ціллю, до бою (видимість одразу для вогню)
+    safe(ctx, 'бпла', () => {
+      if (ctx.mem.target == null || typeof Air === 'undefined') return;
+      const c = state.map.settlements[ctx.mem.target].center;
+      if (!Air.uavReason(state, f, c) && Air.lossChance(state, f, c) < 30 && ok(Air.launch(state, f, c))) { ctx.stats.other++; refreshEnemies(ctx); }
+    });
     // 1. Машини з пасажирами — довезти/висадити
     for (const v of units) if (Transport.isVehicle(v) && Transport.passengers(state, v).length && Engine.canAct(v)) { safe(ctx, 'транспорт', () => driveVehicle(ctx, v)); mark(v); }
     // 2. Зламані — відводимо
@@ -9012,7 +9144,7 @@ const AI = (() => {
       if (h && (h.faction !== f || h.personnel.fit <= 0 || h.embarked != null)) h = null;
       if (!h) h = units.find(u => u.idx === c && pool.has(u)) || null;
       if (!h) {
-        const cands = [...pool].filter(u => role(u) !== 'armor' && g.dist(u.idx, c) <= s.radius + 12)
+        const cands = [...pool].filter(u => role(u) !== 'armor' && u.type !== 'eng_squad' && g.dist(u.idx, c) <= s.radius + 12)
           .sort((a, b) => (g.dist(a.idx, c) <= s.radius + 3 ? 0 : 1) - (g.dist(b.idx, c) <= s.radius + 3 ? 0 : 1) || power(a) - power(b) || g.dist(a.idx, c) - g.dist(b.idx, c) || a.id - b.id);
         h = cands[0] || null;
       }
@@ -9042,6 +9174,10 @@ const AI = (() => {
       }
     }
 
+    // 6б. Об’єкти поза пунктами (заводи, польові склади, блокпости, аеропорт): під загрозою —
+    // хтось іде їх тримати; рейди — малі групи забирають чужі/нічийні об’єкти, де ворога не видно
+    safe(ctx, 'об’єкти', () => facilities(ctx, pool));
+
     // 7. Наступ
     const strike = [...pool];
     const groups = planGroups(ctx, strike);
@@ -9063,7 +9199,8 @@ const AI = (() => {
         if (res === 'here') hold(ctx, u, 'observe');
       } else if (r === 'artillery') {
         // навісна — підтягнути, щоб ціль була в межах дальності, але не ближче 3 гексів до ворога
-        if (front == null || u.type === 'arty_team' || u.order) continue;
+        if (u.type === 'arty_team') { if (front != null && !u.order) safe(ctx, 'буксир', () => towArtillery(ctx, u, front)); continue; }
+        if (front == null || u.order) continue;
         const range = Math.floor(Combat.maxRange(u, true, state) / CONFIG.hexMeters);
         const d = g.dist(u.idx, front);
         if (d <= range - 1) continue;
@@ -9072,12 +9209,15 @@ const AI = (() => {
         hold(ctx, u, 'observe');
       } else if (r === 'rear') {
         if (u.order) continue;
+        if (u.type === 'eng_squad' && safe(ctx, 'блокпост', () => buildCheckpoint(ctx, u))) continue;
         const here = inSettlement(ctx, u.idx);
         if (here && here.friendly && here.enemyPow < 1) { hold(ctx, u); continue; }
         const home = ctx.settlements.filter(x => x.friendly && x.enemyPow < 1).sort((a, b) => g.dist(u.idx, a.s.center) - g.dist(u.idx, b.s.center))[0];
         if (home) safe(ctx, 'тил', () => moveNear(ctx, u, home.s.center, 0, home.radius, { preferSettlement: home.k, tries: 2 }));
       } else if (r === 'transport') {
         if (u.order) continue;
+        // тягач їде по гаубицю, якій треба на позицію
+        if (ctx.towCall && ctx.towCall.vehicle === u.id) { safe(ctx, 'буксир', () => moveTo(ctx, u, ctx.towCall.idx)); continue; }
         const here = inSettlement(ctx, u.idx);
         if (here && here.friendly && here.enemyPow < 1) continue;
         const home = ctx.settlements.filter(x => x.friendly && x.enemyPow < 1).sort((a, b) => g.dist(u.idx, a.s.center) - g.dist(u.idx, b.s.center))[0];
@@ -9099,7 +9239,7 @@ const AI = (() => {
     if (level === 'hard') safe(ctx, 'економіка', () => economy(ctx));
     safe(ctx, 'бій', () => level === 'hard' ? militaryHard(ctx) : militaryEasy(ctx));
     // прибрати задачі зниклих машин
-    for (const id of Object.keys(ctx.mem.tasks)) if (!Engine.unitById(state, Number(id))) delete ctx.mem.tasks[id];
+    for (const id of Object.keys(ctx.mem.tasks)) if (!Engine.unitById(state, Number(String(id).replace(/^cp/, '')))) delete ctx.mem.tasks[id];
     return { ok: true, faction: f, level, stats: ctx.stats };
   }
 
