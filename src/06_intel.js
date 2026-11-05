@@ -86,6 +86,7 @@ const Intel = (() => {
   // Чи спостерігає фракція гекс (для зняття застарілих позначок)
   function hexObserved(state, faction, idx) {
     const g = Engine.grid(state);
+    if (typeof Air !== 'undefined' && Air.sees(state, faction, idx)) return true;
     const conc = D().concealment[Engine.terrainKey(state, idx)] || 0;
     for (const u of state.units) {
       if (u.faction !== faction || u.personnel.fit <= 0) continue;
@@ -116,6 +117,11 @@ const Intel = (() => {
       dist: minD
     };
   }
+  function describeDrone(state, e) {
+    const ut = CONFIG.unitTypes[e.type];
+    return { id: e.id, faction: e.faction, idx: e.idx, day: state.time.day, hour: state.time.hour, turn: state.time.turn,
+      cls: isVehicle(e) ? 'vehicle' : 'foot', type: e.type, label: ut.name, fit: null, approx: approxSize(ut.personnel), dist: 0, drone: true };
+  }
   function approxSize(n) { return n >= 15 ? 'взвод (~20)' : n >= 5 ? 'відділення (~5)' : 'група (2–4)'; }
 
   // Повне оновлення картини для всіх трьох фракцій
@@ -128,10 +134,12 @@ const Intel = (() => {
       for (const e of live) {
         if (e.faction === f) continue;
         const seenBy = observers.filter(o => canSee(state, o, e));
-        if (!seenBy.length) continue;
+        // БПЛА над районом (07j_air.js): бачить і впізнає тип, чисельність — приблизно
+        const drone = !seenBy.length && typeof Air !== 'undefined' && Air.sees(state, f, e.idx);
+        if (!seenBy.length && !drone) continue;
         sets[f].add(e.id);
         const prev = intel[f][e.id];
-        const info = describe(state, f, e, seenBy);
+        const info = drone ? describeDrone(state, e) : describe(state, f, e, seenBy);
         // вже ідентифікований тип не «забувається»
         if (prev && prev.type && !info.type) { info.type = prev.type; info.label = prev.label; }
         intel[f][e.id] = info;

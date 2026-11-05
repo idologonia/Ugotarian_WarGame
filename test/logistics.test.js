@@ -4,7 +4,7 @@ let fails=0;const ok=(c,m)=>{if(!c){fails++;console.log('FAIL',m);}else console.
 const hours=(s,n)=>{for(let i=0;i<n*3;i++)Engine.endPhase(s);};
 // 1. розміщення
 {const s=Engine.newGame(1999);const F=Logistics.facilities(s);
- ok(F.length===19,'19 facilities placed (incl. 3 field depots on roads and neutral unclaimed ones) ('+F.map(f=>f.type+':'+f.owner).join(', ')+')');
+ ok(F.length===20,'20 facilities placed (incl. 3 field depots on roads, the DP airport and neutral unclaimed ones) ('+F.map(f=>f.type+':'+f.owner).join(', ')+')');
  ok(F.every(f=>f.idx>=0&&s.map.terrain[f.idx]!==TERRAIN_ID.sea),'all on land');
  ok(F.filter(f=>f.type==='depot'&&f.owner>=0).length===3,'one owned depot per faction (plus neutral unclaimed depots elsewhere)');
  ok(Logistics.known(s,1).every(f=>f.owner!==0),'rebels do not know socialist facilities at start');

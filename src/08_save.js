@@ -160,6 +160,8 @@ const SaveSystem = (() => {
     if (!Array.isArray(state.map.borderEntry) || state.map.borderEntry.length !== 3) state.map.borderEntry = [-1, -1, -1];
     if (!Array.isArray(state.map.borderEntryName) || state.map.borderEntryName.length !== 3) state.map.borderEntryName = [null, null, null];
     if (!Array.isArray(state.geo) || state.geo.length !== 3) state.geo = CONFIG.geopolitics.startRelation.slice();
+    // Старі збереження без аеропорту ДП — будуємо його на місці аеродрому (якщо перехід є)
+    if (state.facilities && typeof Air !== 'undefined' && !Air.airport(state, 1) && state.map.borderEntry[1] >= 0) Air.placeAirport(state);
     return { ok: true, state, notes, savedAt: raw.savedAt || null };
   }
 

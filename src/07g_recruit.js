@@ -220,7 +220,7 @@ const Recruit = (() => {
     const it = BM().items[key];
     const price = it.price * qty;
     Logistics.ensureEconomy(state)[f].money -= price;
-    const o = { id: (state.nextMarketId = (state.nextMarketId || 0) + 1), faction: f, key, qty, n: it.n * qty, kind: it.kind, storeId, arrive: state.time.turn + BM().deliveryHours, price };
+    const o = { id: (state.nextMarketId = (state.nextMarketId || 0) + 1), faction: f, key, qty, n: it.n * qty, kind: it.kind, storeId, arrive: state.time.turn + Math.ceil(BM().deliveryHours * Air.deliveryMult(state, f)), price };
     orders(state).push(o);
     Engine.log(state, `Чорний ринок: замовлено ${itemName(key)} — ${o.n} ${itemUnit(key)} за ${price} грн. Доставка на «${store.name}» через ${BM().deliveryHours} год.`, 'event', f);
     return { ok: true };

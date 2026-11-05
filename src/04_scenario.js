@@ -206,6 +206,7 @@ const Scenario = {
       }
     });
     Logistics.placeScenario(state);
+    Air.placeAirport(state);
     Field.placeMotorpool(state);
     Logistics.ensureEconomy(state);
     Politics.init(state);
@@ -255,12 +256,27 @@ const Scenario = {
       return best;
     }
 
+    function midCoast() {
+      let best = -1, bs = Infinity;
+      for (let i = 0; i < N; i++) {
+        if (map.control[i] !== 0 || map.river[i] || CONFIG.terrain[map.terrain[i]].key !== 'coast') continue;
+        const row = grid.row(i);
+        if (row < 8 || row > grid.h - 9 || grid.dist(i, seeds[0]) < 12) continue;
+        const sc = Math.abs(row - grid.h / 2) * 10 + (map.road[i] ? 0 : 1);
+        if (sc < bs) { bs = sc; best = i; }
+      }
+      return best;
+    }
+
     const idx = [-1, -1, -1];
     const names = ['', '', ''];
     for (let f = 0; f < 3; f++) {
       // 1. шукаємо гекс найбажанішого для цього патрона типу місцевості у власній території;
       // 2. якщо такого немає — беремо будь-який прохідний гекс своєї території (як раніше).
-      let i = findBest(f, PREF[f]);
+      // Рішення автора: порт СВ — не на краю карти й не біля самого міста, а на узбережжі ближче
+      // до середини карти (по вертикалі), не ближче 12 гексів до міста й 8 рядків до краю.
+      let i = f === 0 ? midCoast() : -1;
+      if (i < 0) i = findBest(f, PREF[f]);
       if (i < 0) i = findBest(f, null);
       idx[f] = i;
       if (i < 0) { names[f] = patron(f) ? patron(f).entryName : 'Прикордонний перехід'; continue; }

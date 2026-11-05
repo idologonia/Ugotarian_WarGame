@@ -96,9 +96,11 @@ const Foreign = (() => {
     const price = pmcPrice(state, f, itemKey);
     Logistics.ensureEconomy(state)[f].money -= price;
     lastPmcTurn(state)[f] = state.time.turn;
-    const arrive = state.time.turn + G().pmc.deliveryHours;
+    // вантажний рейс через аеропорт (ДП) — швидше
+    const dh = Math.ceil(G().pmc.deliveryHours * Air.deliveryMult(state, f));
+    const arrive = state.time.turn + dh;
     queue(state).push({ id: (state.nextForeignId = (state.nextForeignId || 0) + 1), kind: 'pmc', faction: f, storeId, idx: store.idx, arrive, unitType: item.unitType, itemLabel: item.label });
-    Engine.log(state, `${fname(f)}: замовлено в «${patron(f).name}»: ${item.label} (−${price} грн). Прибуття на «${store.name}» через ${G().pmc.deliveryHours} год.`, 'event', f);
+    Engine.log(state, `${fname(f)}: замовлено в «${patron(f).name}»: ${item.label} (−${price} грн). Прибуття на «${store.name}» через ${dh} год${dh < G().pmc.deliveryHours ? ' (вантажним рейсом через аеропорт)' : ''}.`, 'event', f);
     adjustGeo(state, f, G().events.pmcUsed, `найм «${patron(f).name}»`);
     return { ok: true };
   }

@@ -618,6 +618,26 @@ const UI = (() => {
     const s = view.s;
     if (s < 7) return;
     const f = pf();
+    // злітна смуга аеропорту
+    for (const fa of Logistics.known(state, f)) {
+      if (!fa.runway || fa.runway.length < 2) continue;
+      const pts = fa.runway.map(i => { const c = g.center(i); return toScreen(c.x, c.y); });
+      ctx.lineCap = 'butt';
+      ctx.strokeStyle = '#4a4a46'; ctx.lineWidth = Math.max(5, s * 0.5);
+      ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]); for (const p of pts.slice(1)) ctx.lineTo(p[0], p[1]); ctx.stroke();
+      ctx.strokeStyle = '#f2efe6'; ctx.lineWidth = Math.max(1, s * 0.05); ctx.setLineDash([s * 0.25, s * 0.2]);
+      ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]); for (const p of pts.slice(1)) ctx.lineTo(p[0], p[1]); ctx.stroke();
+      ctx.setLineDash([]); ctx.lineCap = 'round';
+    }
+    // зона спостереження БПЛА (своя), і превʼю району при виборі вильоту
+    const droneRing = (idx, r, dashed) => {
+      const c = g.center(idx); const [x, y] = toScreen(c.x, c.y);
+      ctx.strokeStyle = 'rgba(40,70,120,0.85)'; ctx.lineWidth = 2; ctx.setLineDash(dashed ? [6, 5] : []);
+      ctx.beginPath(); ctx.arc(x, y, r * s * SQRT3, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
+      ctx.fillStyle = 'rgba(40,70,120,0.08)'; ctx.fill();
+    };
+    for (const so of Air.activeSorties(state, f)) droneRing(so.idx, so.radius, false);
+    if (mode === 'uav' && hoverHex >= 0) droneRing(hoverHex, CONFIG.air.uav.radius, true);
     for (const fa of Logistics.known(state, f)) {
       if (!visSet.has(fa.idx)) continue;
       const seen = fa.owner === f ? { owner: fa.owner, destroyed: fa.destroyed } : (fa.seen[f] || { owner: fa.owner, destroyed: fa.destroyed });
@@ -956,6 +976,7 @@ const UI = (() => {
       retreat: preview && preview.ok ? 'Відступ у тил запропоновано: Enter — підтвердити, або клацніть інший гекс.' : 'Відступ: оберіть гекс. Маршрут обходитиме відомого противника.',
       attack: preview && preview.ok ? 'Клацніть ціль ще раз або Enter — відкрити вогонь. Esc — скасувати.' : (attackIsIndirect() ? 'Навісний вогонь: клацніть ціль у червоній зоні — відомого противника або будь-який гекс (вогонь по площі). Esc — скасувати.' : intensity === 'suppress' ? 'Вогонь на придушення: клацніть будь-який гекс у зоні вогню — відомого противника, застарілу позначку або просто ймовірну позицію. Esc — скасувати.' : 'Атака: оберіть ціль, обведену червоним. Esc — скасувати.')
     };
+    texts.uav = `${CONFIG.air.uav.name}: клацніть район вильоту — коло показує зону спостереження (${CONFIG.air.uav.radius} гекс.). Esc — скасувати.`;
     if (mode && !handover) { el.hidden = false; el.textContent = texts[mode]; } else el.hidden = true;
   }
 
@@ -1679,6 +1700,14 @@ const UI = (() => {
       if (preview && preview.ok && preview.path && preview.target === i) confirmMove(); else doMovePreview(i);
       return;
     }
+    if (mode === 'uav') {
+      const r = Air.launch(state, Engine.phaseFaction(state), i);
+      mode = null;
+      if (!r.ok) toast(r.reason, true);
+      else toast(r.lost ? `Виліт виконано (виявлено: ${r.seen}), але апарат втрачено.` : `Виліт: у районі виявлено противника — ${r.seen}.`, r.lost);
+      renderAll();
+      return;
+    }
     if (mode === 'attack' && sel) {
       if (preview && preview.ok && !preview.path && preview.hex === i) { confirmAttack(); return; }
       if (enemiesHere.length) doAttackPreview({ unitId: enemiesHere[0].id });
@@ -2134,6 +2163,17 @@ const UI = (() => {
         ${Recruit.orders(state).filter(o => o.faction === f).length ? `<ul class="list">${Recruit.orders(state).filter(o => o.faction === f).map(o => `<li><span>${esc(Recruit.itemName(o.key))} — ${o.n} ${esc(Recruit.itemUnit(o.key))}</span><span>прибуде о ${esc(Engine.timeLabel(Engine.addHours(state.time, o.arrive - state.time.turn)))}</span></li>`).join('')}</ul>` : ''}
       </div>`;
   }
+  // Аеропорт і БПЛА (ДП)
+  function airHtml(f) {
+    const ap = Air.airport(state, f), ar = Air.airportReason(state, f), u = Air.uav(state, f), U = CONFIG.air.uav;
+    const why = Air.uavReason(state, f, null);
+    return `<div><h3 style="margin:0 0 6px;font-size:13px">${esc(ap.name)} і повітряна розвідка</h3>
+      <p class="notice">Аеропорт (${esc(Engine.grid(state).label(ap.idx))}): ${ar ? `<span style="color:var(--bad)">${esc(ar)}</span>` : `працює — ПВК і закупівлі прибувають удвічі швидше вантажними рейсами`}.</p>
+      ${u.unlocked ? `<div class="form-row"><button type="button" class="primary" id="uavGo" ${why ? `disabled title="${esc(why)}"` : ''}>Виліт ${esc(U.name)}</button>
+        <span class="notice">Апаратів: ${u.airframes}. ${why ? esc(why) : `Готовий. Радіус спостереження ${U.radius} гекс. до кінця години, вночі не літає, базовий ризик втрати ${U.lossBase}% (більше біля ворожих «Утьосів»).`}</span></div>`
+        : `<p class="notice">${esc(U.name)} — після рішення «Повітряна розвідка НАТО» (Політика → Рішення).</p>`}
+    </div>`;
+  }
   // Іноземні інвестиції (повстанці): гроші від спонсора; може відмовити, сума й шанс — за стосунками
   function investHtml(f) {
     const I = CONFIG.geopolitics.investment;
@@ -2236,6 +2276,7 @@ const UI = (() => {
         ${Foreign.queue(state).filter(o => o.faction === f && o.kind === 'pmc').length ? `<ul class="list">${Foreign.queue(state).filter(o => o.faction === f && o.kind === 'pmc').map(o => `<li><span>${esc(o.itemLabel || 'ПВК')} від «${esc(Foreign.patron(f).name)}»</span><span>прибуде о ${esc(Engine.timeLabel(Engine.addHours(state.time, o.arrive - state.time.turn)))}</span></li>`).join('')}</ul>` : ''}
       </div>
       ${f !== 0 ? investHtml(f) : ''}
+      ${Air.airport(state, f) ? airHtml(f) : ''}
       <div><h3 style="margin:0 0 6px;font-size:13px">Добровольці — ${esc(Foreign.sponsor(f).volunteers.toLowerCase())}</h3>
         ${(() => { const left = Foreign.volCooldownLeft(state, f); return left > 0 ? `<p class="notice">Заклик знову можливий через ${left} год.</p>` : ''; })()}
         <div class="form-row">
@@ -2260,6 +2301,8 @@ const UI = (() => {
         const r = Recruit.buy(state, f, $('bmItem').value, Math.floor(Number($('bmQty').value) || 1), Number($('bmStore').value));
         if (!r.ok) toast(r.reason, true); else { toast('Замовлено.'); renderAll(); openEconomy(); }
       };
+      const ug = root.querySelector('#uavGo');
+      if (ug) ug.onclick = () => { closeModal(); resetSelection(); mode = 'uav'; renderAll(); };
       const ib = root.querySelector('#invReq');
       if (ib) ib.onclick = () => {
         const r = Foreign.requestInvestment(state, f);
@@ -2339,7 +2382,7 @@ const UI = (() => {
         <thead><tr><th>Підрозділ</th><th>Осіб</th><th>Пересування</th><th>ОР/год</th></tr></thead><tbody>${units}</tbody></table></div></div>`);
   }
 
-  return { init, setState, openMainMenu, getState: () => state, toast, renderAll, __test: { hexClick: (i, b = 0) => onHexClick(i, b), select: id => selectUnit(id, true) } };
+  return { init, setState, openMainMenu, getState: () => state, toast, renderAll, __test: { hexClick: (i, b = 0) => onHexClick(i, b), select: id => selectUnit(id, true), center: i => centerOn(i) } };
 })();
 
 // ------------------------------------------------------------------ запуск
