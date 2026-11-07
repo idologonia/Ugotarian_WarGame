@@ -3,3 +3,4 @@ test/out/
 __pycache__/
 *.cpuprofile
 .DS_Store
+server/saves/
