@@ -209,6 +209,37 @@ aside, #log { background: var(--panel); min-height: 0; min-width: 0; }
 .dec-req { margin: 0; padding: 0; list-style: none; font-size: 12px; }
 .dec-req .ok { color: var(--accent); } .dec-req .no { color: var(--bad); }
 .dec-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); margin-top: auto; }
+/* Онлайн: лобі й чат */
+#netlobby { position: fixed; inset: 0; z-index: 26; background: var(--bg); overflow-y: auto; display: grid; place-items: center; padding: 24px 16px; }
+#netlobby[hidden] { display: none; }
+.nl-card { background: var(--panel); border: 1px solid var(--line); border-top: 8px solid var(--accent); width: min(640px, 100%); padding: 22px 24px; display: flex; flex-direction: column; gap: 14px; }
+.nl-card h1 { margin: 0; font-size: 26px; letter-spacing: 0.1em; text-transform: uppercase; }
+.nl-card h1 small { display: block; font-size: 12px; letter-spacing: 0.14em; color: var(--muted); font-weight: 500; margin-top: 3px; }
+.nl-card h2 { margin: 0 0 6px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; }
+.nl-card input { background: var(--bg); border: 1px solid var(--line); border-radius: 3px; padding: 5px 8px; }
+.nl-card select { background: var(--bg); border: 1px solid var(--line); border-radius: 3px; padding: 4px 6px; }
+.nl-card .notice { margin: 6px 0 0; color: var(--muted); font-size: 13px; }
+.nl-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+.nl-status { font-size: 12px; white-space: nowrap; } .nl-status.online { color: #2f8a3a; } .nl-status.offline { color: var(--bad); } .nl-status.connecting { color: var(--muted); }
+.nl-host { font-size: 12px; color: var(--accent); font-weight: 600; }
+.nl-slots { display: flex; flex-direction: column; gap: 6px; }
+.nl-slot { display: grid; grid-template-columns: auto auto 1fr auto; gap: 10px; align-items: center; padding: 8px 10px; background: var(--panel-2); border: 1px solid var(--line); }
+.nl-slot.me { border-color: var(--accent); }
+.nl-slot .nl-act { display: flex; gap: 6px; align-items: center; justify-content: flex-end; flex-wrap: wrap; }
+.nl-free { color: var(--muted); font-style: italic; } .nl-bot { color: var(--muted); } .nl-pl.off { color: var(--muted); }
+.nl-players { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0; font-size: 13px; } .nl-players .off { color: var(--muted); }
+.nl-chat .chat-list { max-height: 180px; }
+#chatPanel { position: fixed; right: 12px; bottom: 12px; z-index: 24; width: min(380px, calc(100vw - 24px)); background: var(--panel); border: 1px solid var(--line); box-shadow: 0 6px 24px rgba(0,0,0,0.25); display: flex; flex-direction: column; }
+#chatPanel[hidden] { display: none; }
+.chat-head { display: flex; justify-content: space-between; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+.chat-head button { padding: 2px 8px; }
+#chatBody { padding: 8px 10px; display: flex; flex-direction: column; gap: 8px; }
+.chat-list { max-height: 260px; overflow-y: auto; font-size: 13px; display: flex; flex-direction: column; gap: 3px; }
+.cm { line-height: 1.35; } .cm.sys { color: var(--muted); font-style: italic; } .cm.priv { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.cm-t { color: var(--muted); font-family: var(--font-data); font-size: 11px; margin-right: 4px; }
+.chat-in { display: flex; gap: 6px; } .chat-in input { flex: 1; min-width: 0; background: var(--bg); border: 1px solid var(--line); border-radius: 3px; padding: 4px 6px; }
+.chat-in select { background: var(--bg); border: 1px solid var(--line); border-radius: 3px; padding: 3px 4px; max-width: 110px; }
+@media (max-width: 520px) { .nl-slot { grid-template-columns: auto 1fr; } .nl-slot .nl-act { grid-column: 1 / -1; justify-content: flex-start; } }
 /* Головне меню */
 #mainmenu { position: fixed; inset: 0; z-index: 25; background: var(--bg); overflow-y: auto; display: grid; place-items: center; padding: 24px 16px;
   background-image: repeating-linear-gradient(135deg, transparent 0 22px, color-mix(in srgb, var(--line) 35%, transparent) 22px 23px); }
@@ -311,6 +342,7 @@ button.mini { font-size: 12px; padding: 2px 8px; }
       <button id="btnEco" type="button">Економіка</button>
       <button id="btnPol" type="button">Політика</button>
       <button id="btnHelp" type="button">Довідка</button>
+      <button id="btnChat" type="button" hidden>Чат</button>
     </div>
   </header>
 
@@ -350,6 +382,8 @@ button.mini { font-size: 12px; padding: 2px 8px; }
   </section>
 </div>
 <div id="mainmenu" hidden></div>
+<div id="netlobby" hidden></div>
+<aside id="chatPanel" hidden aria-label="Чат"><div class="chat-head"><b>Чат</b><button type="button" onclick="Net.toggleChat()" aria-label="Закрити чат">✕</button></div><div id="chatBody"></div></aside>
 <div id="toast"></div>
 <div id="modalRoot"></div>
 

@@ -216,6 +216,37 @@ aside, #log { background: var(--panel); min-height: 0; min-width: 0; }
 .dec-req { margin: 0; padding: 0; list-style: none; font-size: 12px; }
 .dec-req .ok { color: var(--accent); } .dec-req .no { color: var(--bad); }
 .dec-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); margin-top: auto; }
+/* Онлайн: лобі й чат */
+#netlobby { position: fixed; inset: 0; z-index: 26; background: var(--bg); overflow-y: auto; display: grid; place-items: center; padding: 24px 16px; }
+#netlobby[hidden] { display: none; }
+.nl-card { background: var(--panel); border: 1px solid var(--line); border-top: 8px solid var(--accent); width: min(640px, 100%); padding: 22px 24px; display: flex; flex-direction: column; gap: 14px; }
+.nl-card h1 { margin: 0; font-size: 26px; letter-spacing: 0.1em; text-transform: uppercase; }
+.nl-card h1 small { display: block; font-size: 12px; letter-spacing: 0.14em; color: var(--muted); font-weight: 500; margin-top: 3px; }
+.nl-card h2 { margin: 0 0 6px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; }
+.nl-card input { background: var(--bg); border: 1px solid var(--line); border-radius: 3px; padding: 5px 8px; }
+.nl-card select { background: var(--bg); border: 1px solid var(--line); border-radius: 3px; padding: 4px 6px; }
+.nl-card .notice { margin: 6px 0 0; color: var(--muted); font-size: 13px; }
+.nl-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+.nl-status { font-size: 12px; white-space: nowrap; } .nl-status.online { color: #2f8a3a; } .nl-status.offline { color: var(--bad); } .nl-status.connecting { color: var(--muted); }
+.nl-host { font-size: 12px; color: var(--accent); font-weight: 600; }
+.nl-slots { display: flex; flex-direction: column; gap: 6px; }
+.nl-slot { display: grid; grid-template-columns: auto auto 1fr auto; gap: 10px; align-items: center; padding: 8px 10px; background: var(--panel-2); border: 1px solid var(--line); }
+.nl-slot.me { border-color: var(--accent); }
+.nl-slot .nl-act { display: flex; gap: 6px; align-items: center; justify-content: flex-end; flex-wrap: wrap; }
+.nl-free { color: var(--muted); font-style: italic; } .nl-bot { color: var(--muted); } .nl-pl.off { color: var(--muted); }
+.nl-players { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0; font-size: 13px; } .nl-players .off { color: var(--muted); }
+.nl-chat .chat-list { max-height: 180px; }
+#chatPanel { position: fixed; right: 12px; bottom: 12px; z-index: 24; width: min(380px, calc(100vw - 24px)); background: var(--panel); border: 1px solid var(--line); box-shadow: 0 6px 24px rgba(0,0,0,0.25); display: flex; flex-direction: column; }
+#chatPanel[hidden] { display: none; }
+.chat-head { display: flex; justify-content: space-between; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+.chat-head button { padding: 2px 8px; }
+#chatBody { padding: 8px 10px; display: flex; flex-direction: column; gap: 8px; }
+.chat-list { max-height: 260px; overflow-y: auto; font-size: 13px; display: flex; flex-direction: column; gap: 3px; }
+.cm { line-height: 1.35; } .cm.sys { color: var(--muted); font-style: italic; } .cm.priv { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.cm-t { color: var(--muted); font-family: var(--font-data); font-size: 11px; margin-right: 4px; }
+.chat-in { display: flex; gap: 6px; } .chat-in input { flex: 1; min-width: 0; background: var(--bg); border: 1px solid var(--line); border-radius: 3px; padding: 4px 6px; }
+.chat-in select { background: var(--bg); border: 1px solid var(--line); border-radius: 3px; padding: 3px 4px; max-width: 110px; }
+@media (max-width: 520px) { .nl-slot { grid-template-columns: auto 1fr; } .nl-slot .nl-act { grid-column: 1 / -1; justify-content: flex-start; } }
 /* Головне меню */
 #mainmenu { position: fixed; inset: 0; z-index: 25; background: var(--bg); overflow-y: auto; display: grid; place-items: center; padding: 24px 16px;
   background-image: repeating-linear-gradient(135deg, transparent 0 22px, color-mix(in srgb, var(--line) 35%, transparent) 22px 23px); }
@@ -320,6 +351,7 @@ button.mini { font-size: 12px; padding: 2px 8px; }
       <button id="btnEco" type="button">Економіка</button>
       <button id="btnPol" type="button">Політика</button>
       <button id="btnHelp" type="button">Довідка</button>
+      <button id="btnChat" type="button" hidden>Чат</button>
     </div>
   </header>
 
@@ -359,6 +391,8 @@ button.mini { font-size: 12px; padding: 2px 8px; }
   </section>
 </div>
 <div id="mainmenu" hidden></div>
+<div id="netlobby" hidden></div>
+<aside id="chatPanel" hidden aria-label="Чат"><div class="chat-head"><b>Чат</b><button type="button" onclick="Net.toggleChat()" aria-label="Закрити чат">✕</button></div><div id="chatBody"></div></aside>
 <div id="toast"></div>
 <div id="modalRoot"></div>
 
@@ -2946,6 +2980,14 @@ const Intel = (() => {
 
   // Повне оновлення картини для всіх трьох фракцій
   function update(state) {
+    // Картина фракції в онлайн-грі (08b_view.js): видимість уже пораховано на сервері —
+    // клієнт її не перераховує (у нього немає невидимих ворогів, і перерахунок стер би позначки)
+    if (state.view) {
+      const sets = [new Set(), new Set(), new Set()];
+      sets[state.view.faction] = new Set(state.view.visible);
+      visCache.set(state, sets);
+      return sets;
+    }
     const intel = ensure(state);
     const sets = [new Set(), new Set(), new Set()];
     const live = state.units.filter(u => (u.personnel.fit > 0 || u.personnel.straggling > 0) && u.embarked == null);  // пасажирів не видно ззовні
@@ -8404,6 +8446,116 @@ const SaveSystem = (() => {
   return { serialize, deserialize, listSlots, saveToSlot, loadFromSlot, deleteSlot, slotName, storageAvailable: () => !!storage() };
 })();
 
+// ---- 08b_view.js
+// ============================================================================
+// МОДУЛЬ: КАРТИНА ФРАКЦІЇ ДЛЯ ОНЛАЙН-ГРИ (строгий туман війни)
+// Сервер тримає повний стан; кожен гравець отримує лише те, що знає його фракція:
+// свої й союзні підрозділи; противника — тільки видимого зараз, і лише те, що видно
+// ззовні (позиція, клас техніки, позиції/укріплення, оцінка чисельності з розвідки);
+// свою економіку, розвідку, журнал, накази, черги, рішення. Невидимі ворожі підрозділи,
+// чужі запаси, міни, плани й розвіддані до браузера не потрапляють узагалі.
+// Клієнт на картині нічого не симулює: усі накази виконує сервер (85_net.js).
+// ============================================================================
+const View = (() => {
+  const MAP_ARRAYS = {
+    terrain: Uint8Array, river: Uint8Array, bridge: Uint8Array, road: Uint8Array,
+    roadDirs: Uint8Array, control: Int8Array, settlement: Int16Array, region: Uint8Array, shelter: Uint8Array
+  };
+  const LOG_KEEP = 1500;
+  const emptyStock = () => ({ ammo: {}, weapons: {}, goods: {} });
+
+  // Видимий ворог: лише зовнішні ознаки. Тип — справжній, якщо розвідка його впізнала;
+  // інакше — узагальнений за класом (піхота / колісна / броньована техніка).
+  function enemyStub(u, rec) {
+    const ut = CONFIG.unitTypes[u.type];
+    const veh = !!ut.vehicle;
+    let type = u.type;
+    if (!rec || !rec.type) type = veh ? (ut.vehicle.armor === 'armored' ? 'veh_mtlb' : 'veh_uaz') : 'inf_squad';
+    const fit = rec && rec.fit != null ? rec.fit : CONFIG.unitTypes[type].personnel;
+    const vt = CONFIG.unitTypes[type].vehicle;
+    return {
+      id: u.id, faction: u.faction, type, idx: u.idx, name: rec ? rec.label : (veh ? 'Невідома техніка' : 'Невідомий підрозділ'),
+      personnel: { assigned: fit, fit, wounded: 0, killed: 0, captured: 0, missing: 0, straggling: 0 },
+      morale: 50, baseMorale: 50, experience: 0, xp: 0, weapons: {}, ammo: {}, cargo: { weapons: {}, ammo: {}, goods: {} },
+      stance: u.stance === 'ambush' ? 'none' : u.stance, fort: u.fort || 0, deployed: !!u.deployed, mount: u.mount || null,
+      order: null, pendingOrder: null, mp: 0, embarked: null, carrying: [], suppression: 0, dispersal: 0,
+      vehicle: vt ? { model: vt.model, fuel: 0, fuelMax: vt.fuelMax, condition: 100, passengers: vt.passengers } : null,
+      comm: { connected: false }, lastReport: null, stub: true
+    };
+  }
+
+  function make(state, f) {
+    const raw = JSON.parse(SaveSystem.serialize(state));
+    delete raw.savedAt;
+    const allied = x => x === f || (typeof Politics !== 'undefined' && state.diplomacy && Politics.allied(state, f, x));
+    const vis = Intel.visibleIds(state, f);
+    const intel = (state.intel && state.intel[f]) || {};
+    raw.units = raw.units.filter(u => allied(u.faction) || (vis.has(u.id) && u.embarked == null))
+      .map(u => allied(u.faction) ? u : enemyStub(u, intel[u.id]));
+    raw.lost = (raw.lost || []).filter(u => u.faction === f);
+    raw.intel = [0, 1, 2].map(x => (x === f ? raw.intel[f] : {}));
+    raw.log = (raw.log || []).filter(e => e.vis == null || e.vis.includes(f)).slice(-LOG_KEEP);
+    // місця боїв — лише відомі; об’єкти — свої або відомі (чужі без запасів)
+    const caches = {};
+    for (const [k, c] of Object.entries(raw.caches || {})) if ((c.knownBy || []).includes(f)) caches[k] = c;
+    raw.caches = caches;
+    raw.facilities = (raw.facilities || []).filter(x => x.owner === f || (x.knownBy || []).includes(f)).map(x => {
+      if (x.owner === f) return x;
+      return Object.assign({}, x, { stock: emptyStock(), patients: 0, captureHold: null });
+    });
+    raw.economy = (raw.economy || []).map((e, x) => (x === f ? e : { money: 0, manpower: 0, manAcc: 0, deadOfWounds: 0, recovered: 0, last: null }));
+    if (raw.diplomacy) raw.diplomacy.proposals = raw.diplomacy.proposals.filter(p => p.from === f || p.to === f);
+    for (const k of ['foreignOrders', 'officialOrders', 'rfSales', 'formations', 'investOrders', 'convoys', 'projects', 'market']) {
+      if (Array.isArray(raw[k])) raw[k] = raw[k].filter(o => o.faction === f);
+    }
+    raw.prisoners = (raw.prisoners || []).filter(p => p.holder === f || p.origin === f);
+    if (raw.uav) raw.uav = { [f]: raw.uav[f] };
+    if (raw.decisions) {
+      raw.decisions.active = raw.decisions.active.map((a, x) => (x === f ? a : null));
+      raw.decisions.done = raw.decisions.done.map((d, x) => (x === f ? d : []));
+      raw.decisions.history = (raw.decisions.history || []).filter(h => h.f === f);
+      raw.decisions.watch = [];
+    }
+    raw.civColumns = (state.civColumns || []).filter(c => typeof Civil === 'undefined' || Civil.visibleTo(state, f, c)).map(c => Object.assign({}, c));
+    // міни й «єгоза» — лише свої (чужі невидимі; гравець дізнається, наступивши)
+    const own = obj => { const o = {}; for (const [idx, byF] of Object.entries(obj || {})) if (byF && byF[f] != null) o[idx] = { [f]: byF[f] }; return o; };
+    raw.map.mines = own(raw.map.mines);
+    raw.map.wire = own(raw.map.wire);
+    if (raw.lastCombat && !(raw.lastCombat.visibleTo || []).includes(f)) raw.lastCombat = null;
+    delete raw.ai;
+    if (Array.isArray(raw.geo)) raw.geo = raw.geo.map((x, i) => (i === f ? x : null));   // чужі стосунки зі спонсорами
+    raw.view = { faction: f, visible: [...vis], rev: state.rev || 0 };
+    return raw;
+  }
+
+  // Клієнт: відновити типізовані масиви карти
+  function restore(raw) {
+    const map = Object.assign({}, raw.map);
+    for (const [k, T] of Object.entries(MAP_ARRAYS)) if (Array.isArray(map[k])) map[k] = T.from(map[k]);
+    return Object.assign({}, raw, { map });
+  }
+
+  // Відповідь сервера на наказ: об’єкти-підрозділи замінюємо коротким описом (щоб не
+  // передати разом із результатом деталі противника), решту лишаємо як є
+  function sanitize(value, f) {
+    const seen = new WeakSet();
+    const walk = v => {
+      if (v == null || typeof v !== 'object') return v;
+      if (seen.has(v)) return null;
+      seen.add(v);
+      if (ArrayBuffer.isView(v)) return Array.from(v);
+      if (Array.isArray(v)) return v.map(walk);
+      if (v.personnel && v.faction != null && v.idx != null && v.type) return { id: v.id, name: v.faction === f ? v.name : 'противник', faction: v.faction, idx: v.idx };
+      const o = {};
+      for (const [k, x] of Object.entries(v)) o[k] = walk(x);
+      return o;
+    };
+    return walk(value);
+  }
+
+  return { make, restore, sanitize, enemyStub };
+})();
+
 // ---- 09_ai.js
 // ============================================================================
 // МОДУЛЬ: ШТУЧНИЙ ІНТЕЛЕКТ (БОТИ)
@@ -9255,6 +9407,258 @@ const AI = (() => {
   return { LEVELS, CONTROLLER_NAMES, configure, controller, isBot, humans, runPhase, role, power };
 })();
 
+// ---- 85_net.js
+// ============================================================================
+// МОДУЛЬ: КЛІЄНТ ОНЛАЙН-ГРИ (браузер гравця)
+// Якщо сторінку віддав сервер гри (server/server.js), гра працює онлайн:
+//  • лобі: нікнейм, вибір сторони, керування хоста (хто гравець, хто бот, карта, старт,
+//    збереження/завантаження), список гравців;
+//  • усі накази, що змінюють гру, ідуть на сервер — функції правил, які інтерфейс викликає
+//    для наказів, підмінено (installProxies): наказ виконує сервер і повертає результат
+//    разом із новою картиною фракції (08b_view.js). У браузері гра нічого не симулює.
+//  • сповіщення сервера (Server-Sent Events): чужі ходи, лобі, чат;
+//  • чат: загальний і приватний (стороні).
+// Токен гравця зберігається в браузері — після перезавантаження сторінки чи перезапуску
+// сервера гравець автоматично повертається на свою сторону.
+// ============================================================================
+const Net = (() => {
+  // Накази, що змінюють гру (ті самі списки, що й на сервері)
+  const COMMANDS = [
+    'Engine.issueMoveOrder', 'Engine.setStance', 'Engine.deploy', 'Engine.cancelOrder', 'Engine.endPhase', 'Combat.attack',
+    'Transport.disembark', 'Transport.disembarkAll', 'Transport.board', 'Transport.splitSquad', 'Transport.merge', 'Transport.abandonVehicle',
+    'Loot.loot', 'Loot.dropCargo', 'Loot.recoverDead',
+    'Logistics.resupply', 'Logistics.pickupWounded', 'Logistics.loadItem', 'Logistics.loadFromStore', 'Logistics.issueFromCargo',
+    'Logistics.unloadToStore', 'Logistics.destroyFacility', 'Logistics.claimFacility',
+    'Field.takeVehicle', 'Field.startProject', 'Field.mount', 'Field.layWireField', 'Field.issueBinoculars', 'Field.requisition', 'Field.issueVehicle',
+    'Politics.aid', 'Politics.propaganda', 'Politics.raiseMilitia', 'Politics.sendSpies', 'Politics.propose', 'Politics.dissolveAlliance',
+    'Politics.setLabor', 'Politics.interrogate', 'Politics.respond',
+    'Recruit.foundWorkshop', 'Recruit.form', 'Recruit.buy', 'Recruit.setWorkshopRecipe', 'Recruit.upgradeWorkshop',
+    'Foreign.sellRF', 'Foreign.requestInvestment', 'Foreign.officialRequest', 'Foreign.hirePmc', 'Foreign.callVolunteers',
+    'Air.launch', 'Decisions.start', 'Decisions.cancel'
+  ];
+  const LS_KEY = 'yugotaria.online';
+  let active = false, token = null, isHost = false, lobby = null, es = null, rev = -1, busy = false;
+  let chat = [], unread = 0, chatOpen = false, chatTo = 'all', status = 'connecting', fetching = false;
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const store = { get() { try { return JSON.parse(localStorage.getItem(LS_KEY) || '{}'); } catch (e) { return {}; } },
+    set(v) { try { localStorage.setItem(LS_KEY, JSON.stringify(v)); } catch (e) { /* приватний режим */ } } };
+
+  async function detect() {
+    if (typeof location === 'undefined' || !/^https?:$/.test(location.protocol)) return false;
+    try {
+      const r = await fetch('/api/hello', { cache: 'no-store' });
+      if (!r.ok) return false;
+      const j = await r.json();
+      return !!(j && j.game === 'yugotaria');
+    } catch (e) { return false; }
+  }
+  const post = (path, body) => fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(r => r.json());
+  // Синхронний запит — інтерфейс після наказу одразу читає результат (як у звичайній грі)
+  function postSync(path, body) {
+    const x = new XMLHttpRequest();
+    try {
+      x.open('POST', path, false);
+      x.setRequestHeader('Content-Type', 'application/json');
+      x.send(JSON.stringify(body));
+    } catch (e) { return { ok: false, reason: 'Немає зв’язку з сервером.' }; }
+    if (x.status !== 200) return { ok: false, reason: `Сервер відповів помилкою (${x.status}).` };
+    try { return JSON.parse(x.responseText); } catch (e) { return { ok: false, reason: 'Некоректна відповідь сервера.' }; }
+  }
+
+  // ---------------------------------------------------- накази
+  function command(mod, fn, args) {
+    if (busy) return { ok: false, reason: 'Попередній наказ ще обробляється.' };
+    busy = true;
+    let r;
+    try { r = postSync('/api/cmd', { token, mod, fn, args: JSON.parse(JSON.stringify(args)) }); }
+    finally { busy = false; }
+    if (!r.ok) return { ok: false, reason: r.reason || 'Наказ відхилено.' };
+    rev = r.rev;
+    if (r.view) UI.applyView(View.restore(r.view));
+    return r.result == null ? { ok: true } : r.result;
+  }
+  function installProxies() {
+    const MODS = { Engine, Combat, Transport, Loot, Logistics, Politics, Field, Recruit, Foreign, Air, Decisions };
+    for (const key of COMMANDS) {
+      const [m, fn] = key.split('.');
+      if (!MODS[m] || typeof MODS[m][fn] !== 'function') continue;
+      MODS[m][fn] = function (state, ...args) { return command(m, fn, args); };
+    }
+  }
+  async function fetchView() {
+    if (fetching || !lobby || lobby.phase !== 'game' || lobby.me == null || lobby.me.faction == null) return;
+    fetching = true;
+    try {
+      const r = await fetch('/api/view?token=' + encodeURIComponent(token), { cache: 'no-store' });
+      if (!r.ok) return;
+      const v = await r.json();
+      if (busy) return;
+      rev = v.view ? v.view.rev : rev;
+      UI.applyView(View.restore(v));
+    } catch (e) { /* наступне сповіщення спробує знову */ }
+    finally { fetching = false; }
+  }
+
+  // ---------------------------------------------------- підключення
+  async function boot() {
+    active = true;
+    installProxies();
+    const params = new URLSearchParams(location.search);
+    const hostKey = params.get('host');
+    if (hostKey) { try { sessionStorage.setItem('yugotaria.hostKey', hostKey); } catch (e) { /* */ } history.replaceState(null, '', location.pathname); }
+    const saved = store.get();
+    UI.setOnline(true);
+    if (saved.token || saved.name) await join(saved.name || 'Гравець', saved.token);
+    else renderLobby();
+  }
+  async function join(name, tok) {
+    let hk = null;
+    try { hk = sessionStorage.getItem('yugotaria.hostKey'); } catch (e) { /* */ }
+    const r = await post('/api/join', { name, token: tok || undefined, hostKey: hk || undefined });
+    if (!r.ok) { UI.toast(r.reason || 'Не вдалося приєднатися.', true); return; }
+    token = r.token; isHost = r.isHost;
+    store.set({ token, name });
+    connect();
+  }
+  function connect() {
+    if (es) es.close();
+    status = 'connecting';
+    es = new EventSource('/api/events?token=' + encodeURIComponent(token));
+    es.onopen = () => { status = 'online'; renderStatus(); };
+    es.onerror = () => { status = 'offline'; renderStatus(); };
+    es.addEventListener('lobby', e => {
+      const prevPhase = lobby && lobby.phase;
+      lobby = JSON.parse(e.data);
+      isHost = !!(lobby.me && lobby.me.isHost);
+      renderLobby();
+      if (lobby.phase === 'game' && lobby.me && lobby.me.faction != null && prevPhase !== 'game') fetchView();
+      if (lobby.phase === 'lobby' && UI.getState()) UI.leaveOnlineGame();
+      UI.renderOnlineBar();
+    });
+    es.addEventListener('update', e => { const d = JSON.parse(e.data); if (d.rev !== rev) fetchView(); });
+    es.addEventListener('chatlog', e => { chat = JSON.parse(e.data); renderChat(); });
+    es.addEventListener('chat', e => {
+      const m = JSON.parse(e.data);
+      chat.push(m); if (chat.length > 300) chat.shift();
+      if (!chatOpen && !m.system) unread++;
+      renderChat();
+    });
+  }
+  const lobbyAction = (action, extra) => post('/api/lobby', Object.assign({ token, action }, extra || {})).then(r => { if (!r.ok) UI.toast(r.reason || 'Не вдалося.', true); return r; });
+
+  // ---------------------------------------------------- лобі
+  const KIND_NAMES = { human: 'Гравець', easy: 'Бот — легкий', hard: 'Бот — важкий' };
+  function openLobby() { const el = $('netlobby'); if (el) { el.hidden = false; renderLobby(); } }
+  function closeLobby() { const el = $('netlobby'); if (el && lobby && lobby.phase === 'game' && lobby.me && lobby.me.faction != null) el.hidden = true; }
+  function renderLobby() {
+    const el = $('netlobby');
+    if (!el) return;
+    const inGame = lobby && lobby.phase === 'game';
+    const mine = lobby && lobby.me ? lobby.me.faction : null;
+    if (inGame && mine != null && el.dataset.auto !== 'shown') { el.hidden = true; el.dataset.auto = 'shown'; }
+    if (!inGame) { el.hidden = false; el.dataset.auto = ''; }
+    if (el.hidden) return;
+    if (!token) {
+      el.innerHTML = `<div class="nl-card"><h1>Юготарія<small>онлайн-гра</small></h1>
+        <p class="notice">Ви підключилися до сервера гри. Як вас звати?</p>
+        <div class="row"><input id="nlName" maxlength="24" placeholder="Ваше ім’я" autocomplete="nickname"><button type="button" class="primary" id="nlJoin">Приєднатися</button></div></div>`;
+      const go = () => join(($('nlName').value || '').trim() || 'Гравець');
+      $('nlJoin').onclick = go; $('nlName').onkeydown = e => { if (e.key === 'Enter') go(); };
+      setTimeout(() => { const i = $('nlName'); if (i) i.focus(); }, 0);
+      return;
+    }
+    if (!lobby) { el.innerHTML = '<div class="nl-card"><p class="notice">Підключення до сервера…</p></div>'; return; }
+    const L = lobby;
+    const slotRow = s => {
+      const isMe = mine === s.faction;
+      let who;
+      if (s.kind !== 'human') who = `<span class="nl-bot">${esc(KIND_NAMES[s.kind])}</span>`;
+      else if (s.owner) who = `<span class="nl-pl${s.online ? '' : ' off'}">${esc(s.owner)}${s.online ? '' : ' (не в мережі)'}</span>`;
+      else who = '<span class="nl-free">вільно</span>';
+      const take = s.kind === 'human' && (!s.owner || isMe) ? (isMe ? '<button type="button" data-nl="leave">Звільнити</button>' : `<button type="button" class="primary" data-nl="take" data-f="${s.faction}">Зайняти</button>`) : '';
+      const hostCtl = isHost ? `<select data-nlkind="${s.faction}" aria-label="Хто керує: ${esc(s.name)}">${Object.entries(KIND_NAMES).map(([k, n]) => `<option value="${k}"${s.kind === k ? ' selected' : ''}>${n}</option>`).join('')}</select>
+        ${s.kind === 'human' && s.owner && !isMe ? `<button type="button" data-nl="kick" data-f="${s.faction}" title="Звільнити сторону">✕</button>` : ''}` : '';
+      return `<div class="nl-slot${isMe ? ' me' : ''}"><span class="dot" style="background:${CONFIG.factions[s.faction].color}"></span><b>${esc(s.name)}</b>${who}<span class="nl-act">${take}${hostCtl}</span></div>`;
+    };
+    el.innerHTML = `<div class="nl-card">
+      <div class="nl-head"><h1>Юготарія<small>онлайн-гра${inGame && L.game ? ` · ${esc(L.game.time)}` : ''}</small></h1>
+        <span class="nl-status ${status}">${{ online: '● на зв’язку', connecting: '○ підключення…', offline: '● немає зв’язку' }[status]}</span></div>
+      <div class="row"><label for="nlMyName">Ваше ім’я</label><input id="nlMyName" maxlength="24" value="${esc(L.me ? L.me.name : '')}"><button type="button" id="nlRename">Змінити</button>${isHost ? '<span class="nl-host">ви — хост</span>' : ''}</div>
+      <section><h2>Сторони</h2><div class="nl-slots">${L.slots.map(slotRow).join('')}</div>
+        <p class="notice">${inGame ? (mine != null ? 'Гра йде — ви керуєте своєю стороною.' : 'Гра йде. Займіть вільну сторону, щоб приєднатися.') : 'Займіть сторону. Хост обирає, хто з них — гравці, а хто — боти, і починає гру.'}</p></section>
+      ${isHost ? `<section><h2>Хост</h2>
+        ${!inGame ? `<div class="row"><label for="nlSeed">Номер карти</label><input type="number" id="nlSeed" value="${L.seed}" min="1" max="999999"><button type="button" class="primary" id="nlStart">Почати кампанію</button></div>` :
+          `<div class="row"><button type="button" id="nlSave">Зберегти гру</button><button type="button" id="nlToLobby">Завершити й повернутися до лобі</button></div>`}
+        ${L.saves && L.saves.length ? `<div class="row"><label for="nlLoad">Збереження</label><select id="nlLoad">${L.saves.map(s => `<option value="${esc(s.file)}">${esc(s.file)} — ${new Date(s.time).toLocaleString('uk-UA', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</option>`).join('')}</select><button type="button" id="nlLoadBtn">Завантажити</button></div>` : ''}
+      </section>` : ''}
+      <section><h2>Гравці</h2><p class="nl-players">${L.players.map(p => `<span class="${p.online ? '' : 'off'}">${esc(p.name)}${p.isHost ? ' ★' : ''}${p.faction != null ? ` · ${esc(CONFIG.factions[p.faction].short)}` : ''}</span>`).join('')}</p></section>
+      <section><h2>Чат</h2><div class="nl-chat" id="nlChat"></div></section>
+      ${inGame && mine != null ? '<div class="row"><button type="button" class="primary" id="nlBack">До гри</button></div>' : ''}
+    </div>`;
+    el.querySelectorAll('[data-nl]').forEach(b => b.onclick = () => lobbyAction(b.dataset.nl, { faction: Number(b.dataset.f) }));
+    el.querySelectorAll('[data-nlkind]').forEach(s => s.onchange = () => lobbyAction('slot', { faction: Number(s.dataset.nlkind), kind: s.value }));
+    $('nlRename').onclick = () => { const n = ($('nlMyName').value || '').trim(); if (!n) return; store.set({ token, name: n }); lobbyAction('name', { name: n }); };
+    if ($('nlStart')) $('nlStart').onclick = () => lobbyAction('seed', { seed: Number($('nlSeed').value) }).then(() => lobbyAction('start'));
+    if ($('nlSave')) $('nlSave').onclick = () => lobbyAction('save').then(r => { if (r.ok) UI.toast('Гру збережено на сервері.'); });
+    if ($('nlToLobby')) $('nlToLobby').onclick = () => lobbyAction('toLobby');
+    if ($('nlLoadBtn')) $('nlLoadBtn').onclick = () => lobbyAction('load', { file: $('nlLoad').value }).then(r => { if (r.ok) { el.dataset.auto = ''; } });
+    if ($('nlBack')) $('nlBack').onclick = () => { el.hidden = true; };
+    renderChat();
+  }
+  function renderStatus() { const s = document.querySelector('.nl-status'); if (s) renderLobby(); UI.renderOnlineBar(); }
+
+  // ---------------------------------------------------- чат
+  function chatHtml() {
+    const fname = f => (f == null ? '' : CONFIG.factions[f].short);
+    const list = chat.slice(-120).map(m => `<div class="cm${m.system ? ' sys' : ''}${m.to !== 'all' ? ' priv' : ''}"><span class="cm-t">${new Date(m.t).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' })}</span>
+      ${m.system ? '' : `<b style="color:${m.fromFaction != null ? CONFIG.factions[m.fromFaction].color : 'inherit'}">${esc(m.from)}${m.fromFaction != null ? ` (${esc(fname(m.fromFaction))})` : ''}</b>${m.to !== 'all' ? ` → ${esc(fname(m.to))}` : ''}: `}${esc(m.text)}</div>`).join('') || '<p class="notice">Повідомлень ще немає.</p>';
+    const opts = [['all', 'Усім']].concat([0, 1, 2].map(f => [String(f), 'Лише ' + CONFIG.factions[f].short]));
+    return `<div class="chat-list">${list}</div>
+      <div class="chat-in"><select class="chat-to" aria-label="Кому">${opts.map(([v, n]) => `<option value="${v}"${String(chatTo) === v ? ' selected' : ''}>${esc(n)}</option>`).join('')}</select>
+      <input class="chat-text" maxlength="400" placeholder="Повідомлення…" aria-label="Повідомлення"><button type="button" class="chat-send">Надіслати</button></div>`;
+  }
+  function bindChat(root) {
+    if (!root) return;
+    const input = root.querySelector('.chat-text'), to = root.querySelector('.chat-to');
+    const sendIt = () => {
+      const text = (input.value || '').trim(); if (!text) return;
+      input.value = '';
+      chatTo = to.value === 'all' ? 'all' : Number(to.value);
+      post('/api/chat', { token, to: chatTo, text }).then(r => { if (!r.ok) UI.toast(r.reason, true); });
+    };
+    root.querySelector('.chat-send').onclick = sendIt;
+    input.onkeydown = e => { if (e.key === 'Enter') sendIt(); e.stopPropagation(); };
+    to.onchange = () => { chatTo = to.value === 'all' ? 'all' : Number(to.value); };
+    const l = root.querySelector('.chat-list'); if (l) l.scrollTop = l.scrollHeight;
+  }
+  function renderChat() {
+    for (const id of ['nlChat', 'chatBody']) {
+      const el = $(id);
+      if (!el || (id === 'chatBody' && !chatOpen)) continue;
+      const focused = document.activeElement && el.contains(document.activeElement) && document.activeElement.classList.contains('chat-text');
+      const draft = focused ? document.activeElement.value : '';
+      el.innerHTML = chatHtml(); bindChat(el);
+      if (focused) { const i = el.querySelector('.chat-text'); i.value = draft; i.focus(); }
+    }
+    if (chatOpen) unread = 0;
+    const b = $('btnChat'); if (b) b.innerHTML = 'Чат' + (unread ? `<span class="badge">${unread}</span>` : '');
+  }
+  function toggleChat() {
+    const p = $('chatPanel'); if (!p) return;
+    chatOpen = p.hidden; p.hidden = !chatOpen;
+    if (chatOpen) unread = 0;
+    renderChat();
+    if (chatOpen) { const i = p.querySelector('.chat-text'); if (i) i.focus(); }
+  }
+
+  return {
+    detect, boot, command, openLobby, closeLobby, toggleChat,
+    active: () => active, faction: () => (lobby && lobby.me ? lobby.me.faction : null), busy: () => busy,
+    isHost: () => isHost, lobby: () => lobby, status: () => status, COMMANDS
+  };
+})();
+
 // ---- 90_ui.js
 // ============================================================================
 // МОДУЛЬ: ІНТЕРФЕЙС — РЕНДЕРИНГ КАРТИ, ПАНЕЛІ, ВВЕДЕННЯ
@@ -9290,6 +9694,7 @@ const UI = (() => {
   // hotseat — кілька людей (екран передачі ходу); solo — одна людина проти ботів;
   // spectate — усі фракції під ботами, людина спостерігає.
   function playMode() {
+    if (typeof Net !== 'undefined' && Net.active()) return 'online';
     const n = AI.humans(state).length;
     return n === 0 ? 'spectate' : n === 1 ? 'solo' : 'hotseat';
   }
@@ -9297,15 +9702,18 @@ const UI = (() => {
   function commandable() {
     if (!state || botBusy || handover) return false;
     const f = Engine.phaseFaction(state);
+    if (playMode() === 'online') return f != null && f === Net.faction() && !Net.busy();
     return f != null && !AI.isBot(state, f) && f === pf();
   }
   function applyViewer() {
     const m = playMode();
-    viewFaction = m === 'solo' ? AI.humans(state)[0] : m === 'spectate' ? spectator.view : null;
+    viewFaction = m === 'online' ? Net.faction() : m === 'solo' ? AI.humans(state)[0] : m === 'spectate' ? spectator.view : null;
   }
   // Після будь-якої зміни фази: або запускаємо бота, або передаємо хід людині
   function afterPhaseChange() {
     applyViewer();
+    // онлайн: фази й ботів веде сервер; картка «Ваш хід» — у applyView
+    if (playMode() === 'online') { botBusy = false; renderAll(); return; }
     const f = Engine.phaseFaction(state);
     const m = playMode();
     clearTimeout(botTimer);
@@ -9343,7 +9751,15 @@ const UI = (() => {
     const m = playMode();
     const f = Engine.phaseFaction(state);
     const parts = [];
-    if (m === 'spectate') {
+    if (m === 'online') {
+      const L = Net.lobby();
+      const slot = L && f != null ? L.slots[f] : null;
+      const who = !slot ? '' : slot.kind !== 'human' ? 'бот' : slot.owner ? slot.owner : 'вільно';
+      const st = Net.status();
+      parts.push(`<span class="who"><span class="dot" style="background:${st === 'online' ? '#3a8a3a' : '#b3261e'}"></span>${st === 'online' ? 'онлайн' : 'немає зв’язку'}</span>`);
+      if (f != null && f !== Net.faction()) parts.push(`<span class="who"><span class="dot" style="background:${FC[f]}"></span>Хід: ${esc(CONFIG.factions[f].short)} — ${esc(who)}…</span>`);
+      else if (f === Net.faction()) parts.push('<span class="who"><b>Ваш хід</b></span>');
+    } else if (m === 'spectate') {
       parts.push(`<span class="who">Лише боти${state.campaign.over ? ' · кампанію завершено' : ''}</span>`);
       parts.push(`<button type="button" id="spPause" ${state.campaign.over ? 'disabled' : ''}>${spectator.paused ? '▶ Продовжити' : '⏸ Пауза'}</button>`);
       parts.push(`<button type="button" id="spStep" ${spectator.paused && !state.campaign.over ? '' : 'disabled'}>Крок</button>`);
@@ -10120,7 +10536,7 @@ const UI = (() => {
       </div>`;
       return;
     }
-    const solo = playMode() === 'solo';
+    const solo = playMode() === 'solo' || playMode() === 'online';
     el.innerHTML = `<div class="ho-card" style="border-top-color:${FC[f]}">
       <div class="ho-time">${esc(Engine.timeLabel(state.time))}${Engine.isNight(state.time.hour) ? ' · ніч' : ''} · фаза ${f + 1} з 3</div>
       <h2>${solo ? 'Ваш хід' : esc(CONFIG.factions[f].name)}</h2>
@@ -10953,7 +11369,7 @@ const UI = (() => {
     mode = null; preview = null;
     const r = Engine.endPhase(state);
     if (!r.ok) { toast(r.reason, true); return; }
-    if (r.hourEnded) {
+    if (r.hourEnded && playMode() !== 'online') {
       const s = SaveSystem.saveToSlot('auto', state);
       if (!s.ok) toast('Автозбереження не вдалося: ' + s.reason, true);
     }
@@ -11089,8 +11505,9 @@ const UI = (() => {
     $('logOwn').onchange = renderLog;
     $('logAlerts').onchange = renderLog;
     $('logbody').addEventListener('click', e => { const b = e.target.closest('[data-log]'); if (b) jumpToLog(Number(b.dataset.log)); });
-    $('btnSaves').onclick = openSaves;
-    $('btnNew').onclick = () => openMainMenu();
+    $('btnSaves').onclick = () => (state && playMode() === 'online' ? Net.openLobby() : openSaves());
+    $('btnChat').onclick = () => Net.toggleChat();
+    $('btnNew').onclick = () => (playMode() === 'online' ? Net.openLobby() : openMainMenu());
     $('btnHelp').onclick = openHelp;
     document.addEventListener('change', e => {
       const el = e.target.closest('[data-formsel]');
@@ -11688,7 +12105,36 @@ const UI = (() => {
         <thead><tr><th>Підрозділ</th><th>Осіб</th><th>Пересування</th><th>ОР/год</th></tr></thead><tbody>${units}</tbody></table></div></div>`);
   }
 
-  return { init, setState, openMainMenu, getState: () => state, toast, renderAll, __test: { hexClick: (i, b = 0) => onHexClick(i, b), select: id => selectUnit(id, true), center: i => centerOn(i) } };
+  // ---------------------------------------------------- онлайн (85_net.js)
+  let online = false;
+  function setOnline(on) {
+    online = on;
+    $('btnChat').hidden = !on;
+    closeMainMenuForce();
+  }
+  function closeMainMenuForce() { const el = $('mainmenu'); if (el) { el.hidden = true; el.innerHTML = ''; } }
+  // Нова картина фракції з сервера: замінюємо стан, зберігаючи вибір і камеру
+  function applyView(st) {
+    const first = !state;
+    const prevF = state ? Engine.phaseFaction(state) : null, prevTurn = state ? state.time.turn : null;
+    state = st;
+    window.__state = state;
+    if (selectedId != null && !Engine.unitById(state, selectedId)) resetSelection();
+    if (selectedEnemy != null && !Intel.knownList(state, pf(), { allies: 'all' }).some(m => m.id === selectedEnemy)) selectedEnemy = null;
+    applyViewer();
+    if (first) { focusFaction(); leftTab = 'own'; }
+    const f = Engine.phaseFaction(state), me = Net.faction();
+    if (f !== me) handover = false;
+    else if (!first && (prevF !== f || prevTurn !== state.time.turn)) handover = newAlerts(f).length > 0;
+    else if (first) handover = false;
+    zoneCache = null;
+    invalidateBase();
+    renderAll();
+  }
+  function leaveOnlineGame() { state = null; resetSelection(); dirty = true; }
+  function renderOnlineBar() { if (state) { renderTop(); renderBotbar(); } }
+
+  return { init, setState, openMainMenu, applyView, setOnline, leaveOnlineGame, renderOnlineBar, getState: () => state, toast, renderAll, __test: { hexClick: (i, b = 0) => onHexClick(i, b), select: id => selectUnit(id, true), center: i => centerOn(i) } };
 })();
 
 // ------------------------------------------------------------------ запуск
@@ -11700,10 +12146,11 @@ const UI = (() => {
       const r = SaveSystem.deserialize(data.save);
       if (r.ok) st = r.state;
     }
-    // #quickstart — одразу гра трьох людей (для UI-тестів і швидкої перевірки), інакше — меню
-    if (st) UI.setState(st);
-    else if (location.hash === '#quickstart') UI.setState(Engine.newGame(1999));
-    else UI.openMainMenu();
+    // #quickstart — одразу гра трьох людей (для UI-тестів і швидкої перевірки), інакше — меню.
+    // Сторінку віддав сервер онлайн-гри — лобі мультиплеєра (85_net.js).
+    if (st) { UI.setState(st); return; }
+    if (location.hash === '#quickstart') { UI.setState(Engine.newGame(1999)); return; }
+    Net.detect().then(on => { if (on) Net.boot(); else UI.openMainMenu(); });
   };
   const hot = window.claude && window.claude.hot;
   if (hot && hot.snapshot) hot.snapshot(() => ({ save: UI.getState() ? SaveSystem.serialize(UI.getState()) : null }));

@@ -32,6 +32,7 @@ const UI = (() => {
   // hotseat — кілька людей (екран передачі ходу); solo — одна людина проти ботів;
   // spectate — усі фракції під ботами, людина спостерігає.
   function playMode() {
+    if (typeof Net !== 'undefined' && Net.active()) return 'online';
     const n = AI.humans(state).length;
     return n === 0 ? 'spectate' : n === 1 ? 'solo' : 'hotseat';
   }
@@ -39,15 +40,18 @@ const UI = (() => {
   function commandable() {
     if (!state || botBusy || handover) return false;
     const f = Engine.phaseFaction(state);
+    if (playMode() === 'online') return f != null && f === Net.faction() && !Net.busy();
     return f != null && !AI.isBot(state, f) && f === pf();
   }
   function applyViewer() {
     const m = playMode();
-    viewFaction = m === 'solo' ? AI.humans(state)[0] : m === 'spectate' ? spectator.view : null;
+    viewFaction = m === 'online' ? Net.faction() : m === 'solo' ? AI.humans(state)[0] : m === 'spectate' ? spectator.view : null;
   }
   // Після будь-якої зміни фази: або запускаємо бота, або передаємо хід людині
   function afterPhaseChange() {
     applyViewer();
+    // онлайн: фази й ботів веде сервер; картка «Ваш хід» — у applyView
+    if (playMode() === 'online') { botBusy = false; renderAll(); return; }
     const f = Engine.phaseFaction(state);
     const m = playMode();
     clearTimeout(botTimer);
@@ -85,7 +89,15 @@ const UI = (() => {
     const m = playMode();
     const f = Engine.phaseFaction(state);
     const parts = [];
-    if (m === 'spectate') {
+    if (m === 'online') {
+      const L = Net.lobby();
+      const slot = L && f != null ? L.slots[f] : null;
+      const who = !slot ? '' : slot.kind !== 'human' ? 'бот' : slot.owner ? slot.owner : 'вільно';
+      const st = Net.status();
+      parts.push(`<span class="who"><span class="dot" style="background:${st === 'online' ? '#3a8a3a' : '#b3261e'}"></span>${st === 'online' ? 'онлайн' : 'немає зв’язку'}</span>`);
+      if (f != null && f !== Net.faction()) parts.push(`<span class="who"><span class="dot" style="background:${FC[f]}"></span>Хід: ${esc(CONFIG.factions[f].short)} — ${esc(who)}…</span>`);
+      else if (f === Net.faction()) parts.push('<span class="who"><b>Ваш хід</b></span>');
+    } else if (m === 'spectate') {
       parts.push(`<span class="who">Лише боти${state.campaign.over ? ' · кампанію завершено' : ''}</span>`);
       parts.push(`<button type="button" id="spPause" ${state.campaign.over ? 'disabled' : ''}>${spectator.paused ? '▶ Продовжити' : '⏸ Пауза'}</button>`);
       parts.push(`<button type="button" id="spStep" ${spectator.paused && !state.campaign.over ? '' : 'disabled'}>Крок</button>`);
@@ -862,7 +874,7 @@ const UI = (() => {
       </div>`;
       return;
     }
-    const solo = playMode() === 'solo';
+    const solo = playMode() === 'solo' || playMode() === 'online';
     el.innerHTML = `<div class="ho-card" style="border-top-color:${FC[f]}">
       <div class="ho-time">${esc(Engine.timeLabel(state.time))}${Engine.isNight(state.time.hour) ? ' · ніч' : ''} · фаза ${f + 1} з 3</div>
       <h2>${solo ? 'Ваш хід' : esc(CONFIG.factions[f].name)}</h2>
@@ -1695,7 +1707,7 @@ const UI = (() => {
     mode = null; preview = null;
     const r = Engine.endPhase(state);
     if (!r.ok) { toast(r.reason, true); return; }
-    if (r.hourEnded) {
+    if (r.hourEnded && playMode() !== 'online') {
       const s = SaveSystem.saveToSlot('auto', state);
       if (!s.ok) toast('Автозбереження не вдалося: ' + s.reason, true);
     }
@@ -1831,8 +1843,9 @@ const UI = (() => {
     $('logOwn').onchange = renderLog;
     $('logAlerts').onchange = renderLog;
     $('logbody').addEventListener('click', e => { const b = e.target.closest('[data-log]'); if (b) jumpToLog(Number(b.dataset.log)); });
-    $('btnSaves').onclick = openSaves;
-    $('btnNew').onclick = () => openMainMenu();
+    $('btnSaves').onclick = () => (state && playMode() === 'online' ? Net.openLobby() : openSaves());
+    $('btnChat').onclick = () => Net.toggleChat();
+    $('btnNew').onclick = () => (playMode() === 'online' ? Net.openLobby() : openMainMenu());
     $('btnHelp').onclick = openHelp;
     document.addEventListener('change', e => {
       const el = e.target.closest('[data-formsel]');
@@ -2430,7 +2443,36 @@ const UI = (() => {
         <thead><tr><th>Підрозділ</th><th>Осіб</th><th>Пересування</th><th>ОР/год</th></tr></thead><tbody>${units}</tbody></table></div></div>`);
   }
 
-  return { init, setState, openMainMenu, getState: () => state, toast, renderAll, __test: { hexClick: (i, b = 0) => onHexClick(i, b), select: id => selectUnit(id, true), center: i => centerOn(i) } };
+  // ---------------------------------------------------- онлайн (85_net.js)
+  let online = false;
+  function setOnline(on) {
+    online = on;
+    $('btnChat').hidden = !on;
+    closeMainMenuForce();
+  }
+  function closeMainMenuForce() { const el = $('mainmenu'); if (el) { el.hidden = true; el.innerHTML = ''; } }
+  // Нова картина фракції з сервера: замінюємо стан, зберігаючи вибір і камеру
+  function applyView(st) {
+    const first = !state;
+    const prevF = state ? Engine.phaseFaction(state) : null, prevTurn = state ? state.time.turn : null;
+    state = st;
+    window.__state = state;
+    if (selectedId != null && !Engine.unitById(state, selectedId)) resetSelection();
+    if (selectedEnemy != null && !Intel.knownList(state, pf(), { allies: 'all' }).some(m => m.id === selectedEnemy)) selectedEnemy = null;
+    applyViewer();
+    if (first) { focusFaction(); leftTab = 'own'; }
+    const f = Engine.phaseFaction(state), me = Net.faction();
+    if (f !== me) handover = false;
+    else if (!first && (prevF !== f || prevTurn !== state.time.turn)) handover = newAlerts(f).length > 0;
+    else if (first) handover = false;
+    zoneCache = null;
+    invalidateBase();
+    renderAll();
+  }
+  function leaveOnlineGame() { state = null; resetSelection(); dirty = true; }
+  function renderOnlineBar() { if (state) { renderTop(); renderBotbar(); } }
+
+  return { init, setState, openMainMenu, applyView, setOnline, leaveOnlineGame, renderOnlineBar, getState: () => state, toast, renderAll, __test: { hexClick: (i, b = 0) => onHexClick(i, b), select: id => selectUnit(id, true), center: i => centerOn(i) } };
 })();
 
 // ------------------------------------------------------------------ запуск
@@ -2442,10 +2484,11 @@ const UI = (() => {
       const r = SaveSystem.deserialize(data.save);
       if (r.ok) st = r.state;
     }
-    // #quickstart — одразу гра трьох людей (для UI-тестів і швидкої перевірки), інакше — меню
-    if (st) UI.setState(st);
-    else if (location.hash === '#quickstart') UI.setState(Engine.newGame(1999));
-    else UI.openMainMenu();
+    // #quickstart — одразу гра трьох людей (для UI-тестів і швидкої перевірки), інакше — меню.
+    // Сторінку віддав сервер онлайн-гри — лобі мультиплеєра (85_net.js).
+    if (st) { UI.setState(st); return; }
+    if (location.hash === '#quickstart') { UI.setState(Engine.newGame(1999)); return; }
+    Net.detect().then(on => { if (on) Net.boot(); else UI.openMainMenu(); });
   };
   const hot = window.claude && window.claude.hot;
   if (hot && hot.snapshot) hot.snapshot(() => ({ save: UI.getState() ? SaveSystem.serialize(UI.getState()) : null }));

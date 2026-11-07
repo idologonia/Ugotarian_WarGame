@@ -128,6 +128,14 @@ const Intel = (() => {
 
   // Повне оновлення картини для всіх трьох фракцій
   function update(state) {
+    // Картина фракції в онлайн-грі (08b_view.js): видимість уже пораховано на сервері —
+    // клієнт її не перераховує (у нього немає невидимих ворогів, і перерахунок стер би позначки)
+    if (state.view) {
+      const sets = [new Set(), new Set(), new Set()];
+      sets[state.view.faction] = new Set(state.view.visible);
+      visCache.set(state, sets);
+      return sets;
+    }
     const intel = ensure(state);
     const sets = [new Set(), new Set(), new Set()];
     const live = state.units.filter(u => (u.personnel.fit > 0 || u.personnel.straggling > 0) && u.embarked == null);  // пасажирів не видно ззовні
