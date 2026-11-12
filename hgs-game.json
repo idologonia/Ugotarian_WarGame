@@ -1,0 +1,21 @@
+{
+  "manifest_version": 1,
+  "id": "ugotarian-wargame",
+  "name": "Yugotaria: Civil War",
+  "version": "4.5.0",
+  "adapter": "html",
+  "backend": {
+    "mode": "logic",
+    "module": "server/logic.py",
+    "class": "Game",
+    "config": { "node": "node" }
+  },
+  "auth": { "mode": "account" },
+  "client": {
+    "url": "https://idologonia.github.io/Ugotarian_WarGame/",
+    "allowed_origins": ["https://idologonia.github.io"]
+  },
+  "rooms": { "max_rooms": 20, "max_players": 8, "allow_player_create": true, "empty_ttl_s": 600, "default_rooms": ["lobby"] },
+  "limits": { "max_message_bytes": 32768, "messages_per_s": 20, "burst": 40 },
+  "saves": { "enabled": true, "interval_s": 300, "keep": 10 }
+}

@@ -23,6 +23,8 @@ const dist = path.join(__dirname, 'dist');
 fs.mkdirSync(dist, { recursive: true });
 fs.writeFileSync(path.join(dist, 'yugotaria.html'), out);
 fs.writeFileSync(path.join(dist, 'Yugotaria-Civil-War.html'), standalone);
+// SDK HOME GAME SERVER (мережева гра) — поруч зі сторінкою, як її підключає <script src="hgs.js">
+if (fs.existsSync(path.join(__dirname, 'hgs.js'))) fs.copyFileSync(path.join(__dirname, 'hgs.js'), path.join(dist, 'hgs.js'));
 
 const rel = process.argv.indexOf('--release');
 if (rel >= 0) {

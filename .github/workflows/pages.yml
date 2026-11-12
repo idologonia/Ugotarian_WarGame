@@ -34,6 +34,7 @@ jobs:
         run: |
           mkdir -p _site
           cp dist/Yugotaria-Civil-War.html _site/index.html
+          cp dist/hgs.js _site/hgs.js
           cp -r releases _site/releases
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

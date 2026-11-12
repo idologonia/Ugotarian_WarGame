@@ -1655,24 +1655,28 @@ const UI = (() => {
     renderAll();
   }
 
-  function confirmMove() {
+  async function confirmMove() {
     if (!preview || !preview.ok || !preview.path) return;
-    const r = Engine.issueMoveOrder(state, preview.unitId, preview.target, preview.kind);
+    const pv = preview;   // у мережевій грі поки чекаємо сервер, нова картина може скинути вибір
+    const r = await Engine.issueMoveOrder(state, pv.unitId, pv.target, pv.kind);
     if (!r.ok) { toast(r.reason, true); return; }
-    const u = Engine.unitById(state, preview.unitId);
+    const u = Engine.unitById(state, pv.unitId);
+    mode = null; preview = null;
+    if (!u) { renderAll(); return; }
     if (r.pending) toast(`${u.name}: наказ відкладено до наступної години.`);
-    else if (r.result.contact && r.result.contact.length) toast(`${u.name}: виявлено противника — рух зупинено!`, true);
-    else toast(`${u.name}: пройдено ${r.result.moved} гекс.${u.order ? ', рух продовжиться наступної години' : ', ціль досягнуто'}.`);
-    mode = null; preview = null; selectedHex = u.idx;
+    else if (r.result && r.result.contact && r.result.contact.length) toast(`${u.name}: виявлено противника — рух зупинено!`, true);
+    else toast(`${u.name}: пройдено ${r.result ? r.result.moved : 0} гекс.${u.order ? ', рух продовжиться наступної години' : ', ціль досягнуто'}.`);
+    selectedHex = u.idx;
     renderAll();
   }
 
-  function confirmAttack() {
+  async function confirmAttack() {
     if (!preview || !preview.ok || preview.path) return;
-    const r = Combat.attack(state, preview.unitId, preview.target, preview.intensity, { suppress: preview.intensity === 'suppress' });
+    const pv = preview;
+    const r = await Combat.attack(state, pv.unitId, pv.target, pv.intensity, { suppress: pv.intensity === 'suppress' });
     if (!r.ok) { toast(r.reason, true); return; }
-    report = r.report;
-    const res = r.report.result;
+    report = r.report || null;
+    const res = r.report && r.report.result;
     mode = null; preview = null;
     if (!Engine.unitById(state, selectedId)) { selectedId = null; }
     if (selectedEnemy != null && !knownRecord(selectedEnemy)) selectedEnemy = null;
@@ -1688,24 +1692,24 @@ const UI = (() => {
     renderAll();
   }
 
-  function stance(kind) {
-    const r = Engine.setStance(state, selectedId, kind);
+  async function stance(kind) {
+    const r = await Engine.setStance(state, selectedId, kind);
     if (!r.ok) toast(r.reason, true);
     else if (r.pending) toast('Наказ почне діяти з наступної години.');
     mode = null; preview = null;
     renderAll();
   }
 
-  function cancelOrder() {
-    const r = Engine.cancelOrder(state, selectedId);
+  async function cancelOrder() {
+    const r = await Engine.cancelOrder(state, selectedId);
     if (!r.ok) toast(r.reason, true);
     renderAll();
   }
 
-  function endPhase() {
+  async function endPhase() {
     if (!commandable()) return;
     mode = null; preview = null;
-    const r = Engine.endPhase(state);
+    const r = await Engine.endPhase(state);
     if (!r.ok) { toast(r.reason, true); return; }
     if (r.hourEnded && playMode() !== 'online') {
       const s = SaveSystem.saveToSlot('auto', state);
@@ -1716,7 +1720,7 @@ const UI = (() => {
     afterPhaseChange();
   }
 
-  function onHexClick(i, button) {
+  async function onHexClick(i, button) {
     if (i < 0 || handover) return;
     // не свій хід (ходить бот / глядач) — лише огляд карти, без наказів
     if (!commandable()) { mode = null; preview = null; if (button === 2) return; }
@@ -1736,7 +1740,7 @@ const UI = (() => {
       return;
     }
     if (mode === 'uav') {
-      const r = Air.launch(state, Engine.phaseFaction(state), i);
+      const r = await Air.launch(state, Engine.phaseFaction(state), i);
       mode = null;
       if (!r.ok) toast(r.reason, true);
       else toast(r.lost ? `Виліт виконано (виявлено: ${r.seen}), але апарат втрачено.` : `Виліт: у районі виявлено противника — ${r.seen}.`, r.lost);
@@ -1853,7 +1857,7 @@ const UI = (() => {
       const ls = e.target.closest('[data-loadsel]');
       if (ls) loadSel[ls.dataset.loadsel] = ls.value;
     });
-    document.addEventListener('click', e => {
+    document.addEventListener('click', async e => {
       const t = e.target.closest('[data-unit],[data-enemy],[data-act],[data-ltab],[data-int]');
       if (!t || !state || handover) return;
       if (t.dataset.unit) selectUnit(Number(t.dataset.unit), true);
@@ -1874,29 +1878,29 @@ const UI = (() => {
         case 'confirm': confirmMove(); break;
         case 'fire': confirmAttack(); break;
         case 'closeReport': report = null; renderAll(); break;
-        case 'board': act(Transport.board(state, selectedId, Number(t.dataset.vid)), 'Посадку виконано.'); break;
-        case 'disembark': act(Transport.disembark(state, selectedId), 'Висадку виконано.'); break;
-        case 'unloadOne': act(Transport.disembark(state, Number(t.dataset.pid)), 'Висадку виконано.'); break;
-        case 'unloadAll': act(Transport.disembarkAll(state, selectedId), 'Усіх пасажирів висаджено.'); break;
-        case 'split': { const r = Transport.splitSquad(state, selectedId); act(r, 'Відділення виділено.'); break; }
-        case 'deploy': act(Engine.deploy(state, selectedId), 'Зброю розгорнуто.'); break;
-        case 'eng': act(Field.startProject(state, selectedId, t.dataset.etype, Number(t.dataset.etarget)), 'Роботи розпочато.'); break;
-        case 'mount': act(Field.mount(state, selectedId, t.dataset.model), 'Зброю встановлено.'); break;
-        case 'issueBinoculars': act(Field.issueBinoculars(state, selectedId), 'Бінокль отримано.'); break;
-        case 'requisition': { const r = Field.requisition(state, pf(), Number(t.dataset.sid), t.dataset.vtype); act(r, 'Машину реквізовано.'); if (r.ok) selectUnit(r.unitId, true); break; }
-        case 'issueVeh': { const r = Field.issueVehicle(state, pf(), Number(t.dataset.fid), t.dataset.vtype); act(r, 'Машину видано.'); if (r.ok) selectUnit(r.unitId, true); break; }
-        case 'takeVeh': { const r = Field.takeVehicle(state, selectedId, Number(t.dataset.vi)); act(r, 'Техніку забрано.'); if (r.ok) selectUnit(r.unitId, true); break; }
-        case 'aid': act(Politics.aid(state, pf(), Number(t.dataset.sid)), 'Гуманітарну допомогу надано.'); break;
-        case 'propaganda': { const r = Politics.propaganda(state, pf(), Number(t.dataset.sid)); act(r, r.ok ? `Пропагандистську кампанію проведено (+${r.gain}%${r.outrage ? ', підсилено' : ''}).` : ''); break; }
-        case 'militia': { const r = Politics.raiseMilitia(state, pf(), Number(t.dataset.sid), t.dataset.group); act(r, 'Ополчення сформовано.'); if (r.ok) selectUnit(r.unitId); break; }
-        case 'spy': { const r = Politics.sendSpies(state, pf(), Number(t.dataset.sid)); act(r, r.ok ? (r.caught ? 'Диверсантів викрито — підтримка у пункті впала.' : (r.target ? `Диверсія вдалася: уражено «${r.target}».` : 'Диверсія відпрацьована.')) : ''); break; }
-        case 'workshop': act(Recruit.foundWorkshop(state, pf(), Number(t.dataset.sid)), 'Підпільну майстерню облаштовано.'); break;
-        case 'form': { const ty = document.getElementById('formType' + t.dataset.fid); act(Recruit.form(state, pf(), Number(t.dataset.fid), ty ? ty.value : 'inf_squad'), 'Формування розпочато.'); break; }
-        case 'resupply': { const r = Logistics.resupply(state, selectedId); act(r, r.ok ? 'Поповнено: ' + r.text : ''); break; }
+        case 'board': act(await Transport.board(state, selectedId, Number(t.dataset.vid)), 'Посадку виконано.'); break;
+        case 'disembark': act(await Transport.disembark(state, selectedId), 'Висадку виконано.'); break;
+        case 'unloadOne': act(await Transport.disembark(state, Number(t.dataset.pid)), 'Висадку виконано.'); break;
+        case 'unloadAll': act(await Transport.disembarkAll(state, selectedId), 'Усіх пасажирів висаджено.'); break;
+        case 'split': { const r = await Transport.splitSquad(state, selectedId); act(r, 'Відділення виділено.'); break; }
+        case 'deploy': act(await Engine.deploy(state, selectedId), 'Зброю розгорнуто.'); break;
+        case 'eng': act(await Field.startProject(state, selectedId, t.dataset.etype, Number(t.dataset.etarget)), 'Роботи розпочато.'); break;
+        case 'mount': act(await Field.mount(state, selectedId, t.dataset.model), 'Зброю встановлено.'); break;
+        case 'issueBinoculars': act(await Field.issueBinoculars(state, selectedId), 'Бінокль отримано.'); break;
+        case 'requisition': { const r = await Field.requisition(state, pf(), Number(t.dataset.sid), t.dataset.vtype); act(r, 'Машину реквізовано.'); if (r.ok) selectUnit(r.unitId, true); break; }
+        case 'issueVeh': { const r = await Field.issueVehicle(state, pf(), Number(t.dataset.fid), t.dataset.vtype); act(r, 'Машину видано.'); if (r.ok) selectUnit(r.unitId, true); break; }
+        case 'takeVeh': { const r = await Field.takeVehicle(state, selectedId, Number(t.dataset.vi)); act(r, 'Техніку забрано.'); if (r.ok) selectUnit(r.unitId, true); break; }
+        case 'aid': act(await Politics.aid(state, pf(), Number(t.dataset.sid)), 'Гуманітарну допомогу надано.'); break;
+        case 'propaganda': { const r = await Politics.propaganda(state, pf(), Number(t.dataset.sid)); act(r, r.ok ? `Пропагандистську кампанію проведено (+${r.gain}%${r.outrage ? ', підсилено' : ''}).` : ''); break; }
+        case 'militia': { const r = await Politics.raiseMilitia(state, pf(), Number(t.dataset.sid), t.dataset.group); act(r, 'Ополчення сформовано.'); if (r.ok) selectUnit(r.unitId); break; }
+        case 'spy': { const r = await Politics.sendSpies(state, pf(), Number(t.dataset.sid)); act(r, r.ok ? (r.caught ? 'Диверсантів викрито — підтримка у пункті впала.' : (r.target ? `Диверсія вдалася: уражено «${r.target}».` : 'Диверсія відпрацьована.')) : ''); break; }
+        case 'workshop': act(await Recruit.foundWorkshop(state, pf(), Number(t.dataset.sid)), 'Підпільну майстерню облаштовано.'); break;
+        case 'form': { const ty = document.getElementById('formType' + t.dataset.fid); act(await Recruit.form(state, pf(), Number(t.dataset.fid), ty ? ty.value : 'inf_squad'), 'Формування розпочато.'); break; }
+        case 'resupply': { const r = await Logistics.resupply(state, selectedId); act(r, r.ok ? 'Поповнено: ' + r.text : ''); break; }
         case 'load': {
           const uid = Number(t.dataset.uidload);
           const preset = loadSel[uid] || 'ammo';
-          const r = Logistics.loadFromStore(state, uid, preset);
+          const r = await Logistics.loadFromStore(state, uid, preset);
           act(r, r.ok ? 'Завантажено: ' + r.text : '');
           break;
         }
@@ -1908,32 +1912,32 @@ const UI = (() => {
           const qtyEl = document.querySelector(`[data-itemqty="${uid}"]`);
           const it = selEl ? items[Number(selEl.value)] : null;
           const qty = Math.max(1, Math.floor(Number(qtyEl ? qtyEl.value : 1) || 1));
-          const r = it ? Logistics.loadItem(state, uid, it.storeId, it.kind, it.key, qty) : { ok: false, reason: 'Оберіть позицію.' };
+          const r = it ? await Logistics.loadItem(state, uid, it.storeId, it.kind, it.key, qty) : { ok: false, reason: 'Оберіть позицію.' };
           act(r, r.ok ? `Завантажено ×${r.n}.` : '');
           break;
         }
-        case 'layWire': act(Field.layWireField(state, selectedId), 'Єгозу встановлено.'); break;
-        case 'issue': act(Logistics.issueFromCargo(state, selectedId), 'Запаси видано.'); break;
-        case 'unload': { const r = Logistics.unloadToStore(state, selectedId); act(r, r.created ? 'Створено польовий склад.' : 'Розвантажено на склад.'); break; }
-        case 'pickup': act(Logistics.pickupWounded(state, selectedId), 'Поранених забрано.'); break;
+        case 'layWire': act(await Field.layWireField(state, selectedId), 'Єгозу встановлено.'); break;
+        case 'issue': act(await Logistics.issueFromCargo(state, selectedId), 'Запаси видано.'); break;
+        case 'unload': { const r = await Logistics.unloadToStore(state, selectedId); act(r, r.created ? 'Створено польовий склад.' : 'Розвантажено на склад.'); break; }
+        case 'pickup': act(await Logistics.pickupWounded(state, selectedId), 'Поранених забрано.'); break;
         case 'destroyFac': {
           const fa = Logistics.byId(state, Number(t.dataset.fid));
           if (fa && !fa.confirmDestroy) { fa.confirmDestroy = true; renderRight(); setTimeout(() => { fa.confirmDestroy = false; }, 6000); break; }
           if (fa) delete fa.confirmDestroy;
-          act(Logistics.destroyFacility(state, selectedId, Number(t.dataset.fid)), 'Об’єкт знищено.'); break;
+          act(await Logistics.destroyFacility(state, selectedId, Number(t.dataset.fid)), 'Об’єкт знищено.'); break;
         }
-        case 'claimFac': { act(Logistics.claimFacility(state, selectedId, Number(t.dataset.fid)), 'Права на об’єкт заявлено.'); break; }
-        case 'loot': { const r = Loot.loot(state, selectedId); act(r, r.ok ? 'Трофеї зібрано: ' + r.text : ''); break; }
-        case 'recoverDead': { const r = Loot.recoverDead(state, selectedId); act(r, r.ok ? `Загиблих забрано: ${r.n}.` : ''); break; }
+        case 'claimFac': { act(await Logistics.claimFacility(state, selectedId, Number(t.dataset.fid)), 'Права на об’єкт заявлено.'); break; }
+        case 'loot': { const r = await Loot.loot(state, selectedId); act(r, r.ok ? 'Трофеї зібрано: ' + r.text : ''); break; }
+        case 'recoverDead': { const r = await Loot.recoverDead(state, selectedId); act(r, r.ok ? `Загиблих забрано: ${r.n}.` : ''); break; }
         case 'pmcHire': {
           const storeSel = document.getElementById('pmcStore');
-          const r = Foreign.hirePmc(state, pf(), Number(storeSel ? storeSel.value : NaN), t.dataset.item);
+          const r = await Foreign.hirePmc(state, pf(), Number(storeSel ? storeSel.value : NaN), t.dataset.item);
           if (!r.ok) toast(r.reason, true); else { toast('Замовлення ПВК відправлено.'); renderAll(); openEconomy(); }
           break;
         }
-        case 'dropCargo': act(Loot.dropCargo(state, selectedId), 'Вантаж залишено в гексі.'); break;
-        case 'merge': act(Transport.merge(state, selectedId, Number(t.dataset.mid)), 'Підрозділи об’єднано.'); break;
-        case 'abandon': { const r = Transport.abandonVehicle(state, selectedId); act(r, 'Екіпаж залишив машину.'); if (r.ok) selectUnit(r.unitId, true); break; }
+        case 'dropCargo': act(await Loot.dropCargo(state, selectedId), 'Вантаж залишено в гексі.'); break;
+        case 'merge': act(await Transport.merge(state, selectedId, Number(t.dataset.mid)), 'Підрозділи об’єднано.'); break;
+        case 'abandon': { const r = await Transport.abandonVehicle(state, selectedId); act(r, 'Екіпаж залишив машину.'); if (r.ok) selectUnit(r.unitId, true); break; }
         case 'discard': mode = null; preview = null; renderAll(); break;
       }
     });
@@ -2056,8 +2060,13 @@ const UI = (() => {
         <button type="button" id="mmLoad">Завантажити збереження</button>
         <button type="button" id="mmHelp">Довідка</button>
       </div>
+      ${Net.available() ? `<section class="mm-net">
+        <h2>Гра в мережі</h2>
+        <p class="notice">Гра з друзями через HOME GAME SERVER: список кімнат, своя кімната з вибором сторін (гравці й боти). Перший раз — коротка реєстрація (ім’я й пароль).</p>
+        <div class="row"><button type="button" class="primary" id="mmOnline">Гра в мережі</button></div>
+      </section>` : ''}
       <section class="mm-new">
-        <h2>Нова кампанія</h2>
+        <h2>Гра на одинці — нова кампанія</h2>
         <p class="notice">Оберіть, хто керує кожною стороною. Боти бачать лише те, що бачить їхня розвідка. Якщо людей кілька — гра «гаряче місце» з екраном передачі ходу; якщо жодної — ви спостерігаєте за ботами.</p>
         <div class="mm-sides">
           ${[0, 1, 2].map(k => `<label class="mm-side"><span class="dot" style="background:${FC[k]}"></span><span class="nm">${esc(CONFIG.factions[k].name)}</span>
@@ -2088,6 +2097,7 @@ const UI = (() => {
       if (!r.ok) toast(r.errors.join(' '), true);
     };
     $('mmLoad').onclick = openSaves;
+    if ($('mmOnline')) $('mmOnline').onclick = () => { closeMainMenuForce(); Net.open(); };
     $('mmHelp').onclick = openHelp;
     setTimeout(() => { const b = $('btnStart'); if (b && !inGame) b.focus(); }, 0);
   }
@@ -2173,20 +2183,20 @@ const UI = (() => {
     } else if (polTab === 'chron') body = chronicleHtml();
     openModal('Політика', `<div class="ptabs">${tabs.map(([k, n]) => `<button type="button" data-ptab="${k}" aria-pressed="${polTab === k}">${esc(n)}</button>`).join('')}</div>${body}`, root => {
       root.querySelectorAll('[data-ptab]').forEach(b => b.onclick = () => openPolitics(b.dataset.ptab));
-      root.querySelectorAll('[data-dec]').forEach(b => b.onclick = () => {
-        const r = b.dataset.dec === '__cancel' ? Decisions.cancel(state, f) : Decisions.start(state, f, b.dataset.dec);
+      root.querySelectorAll('[data-dec]').forEach(b => b.onclick = async () => {
+        const r = b.dataset.dec === '__cancel' ? await Decisions.cancel(state, f) : await Decisions.start(state, f, b.dataset.dec);
         if (!r.ok) toast(r.reason, true); else toast(b.dataset.dec === '__cancel' ? 'Рішення скасовано.' : 'Рішення розпочато.');
         renderAll(); openPolitics('dec');
       });
-      root.querySelectorAll('[data-pol]').forEach(b => b.onclick = () => {
+      root.querySelectorAll('[data-pol]').forEach(b => b.onclick = async () => {
         let r;
         const k = b.dataset.pol;
-        if (k === 'accept' || k === 'reject') r = Politics.respond(state, Number(b.dataset.id), k === 'accept');
-        else if (k === 'dissolve') r = Politics.dissolveAlliance(state, f, Number(b.dataset.o));
+        if (k === 'accept' || k === 'reject') r = await Politics.respond(state, Number(b.dataset.id), k === 'accept');
+        else if (k === 'dissolve') r = await Politics.dissolveAlliance(state, f, Number(b.dataset.o));
         else if (k === 'send') {
           const to = Number($('dipTo').value), type = $('dipType').value, sid = Number($('dipSet').value);
           const giver = $('dipGiver').value === 'self' ? f : to;
-          r = Politics.propose(state, f, to, type, { settlement: sid, giver });
+          r = await Politics.propose(state, f, to, type, { settlement: sid, giver });
         }
         if (!r.ok) toast(r.reason, true); else toast(k === 'send' ? 'Пропозицію надіслано.' : k === 'accept' ? 'Угоду укладено.' : k === 'reject' ? 'Пропозицію відхилено.' : 'Союз розірвано.');
         Intel.update(state);
@@ -2348,30 +2358,30 @@ const UI = (() => {
       </div>
       <p class="notice">Доходи враховують підтримку населення та страйки. Загинули від ран: ${S.eco.deadOfWounds}. Одужали й повернулися в резерв: ${S.eco.recovered}. Доходи дають підконтрольні місто (${CONFIG.economy.income.city}/год) і села (${CONFIG.economy.income.village}/год).</p>`, root => {
       const rb = root.querySelector('#rfBuy');
-      if (rb) rb.onclick = () => {
-        const r = Foreign.officialRequest(state, f, $('rfBuyItem').value, Math.floor(Number($('rfBuyQty').value) || 1), Number($('rfBuyStore').value));
+      if (rb) rb.onclick = async () => {
+        const r = await Foreign.officialRequest(state, f, $('rfBuyItem').value, Math.floor(Number($('rfBuyQty').value) || 1), Number($('rfBuyStore').value));
         if (!r.ok) toast(r.reason, true); else { toast(r.approved ? 'Запит схвалено — партію в дорозі.' : 'РФ відхилила запит.', !r.approved); renderAll(); openEconomy(); }
       };
       const rs = root.querySelector('#rfSell');
-      if (rs) rs.onclick = () => {
-        const r = Foreign.sellRF(state, f, $('rfSellItem').value, Math.floor(Number($('rfSellQty').value) || 1));
+      if (rs) rs.onclick = async () => {
+        const r = await Foreign.sellRF(state, f, $('rfSellItem').value, Math.floor(Number($('rfSellQty').value) || 1));
         if (!r.ok) toast(r.reason, true); else { toast(`Партія вирушила до кордону — оплата ${r.price} грн після доставки.`); renderAll(); openEconomy(); }
       };
       const b = root.querySelector('#bmBuy');
-      if (b) b.onclick = () => {
-        const r = Recruit.buy(state, f, $('bmItem').value, Math.floor(Number($('bmQty').value) || 1), Number($('bmStore').value));
+      if (b) b.onclick = async () => {
+        const r = await Recruit.buy(state, f, $('bmItem').value, Math.floor(Number($('bmQty').value) || 1), Number($('bmStore').value));
         if (!r.ok) toast(r.reason, true); else { toast('Замовлено.'); renderAll(); openEconomy(); }
       };
       const ug = root.querySelector('#uavGo');
       if (ug) ug.onclick = () => { closeModal(); resetSelection(); mode = 'uav'; renderAll(); };
       const ib = root.querySelector('#invReq');
-      if (ib) ib.onclick = () => {
-        const r = Foreign.requestInvestment(state, f);
+      if (ib) ib.onclick = async () => {
+        const r = await Foreign.requestInvestment(state, f);
         if (!r.ok) toast(r.reason, true); else { toast(r.approved ? `Інвестиції схвалено: ${r.amount} грн надійде через ${CONFIG.geopolitics.investment.deliveryHours} год.` : 'Заявку на інвестиції відхилено.', !r.approved); renderAll(); openEconomy(); }
       };
       const vb = root.querySelector('#volCall');
-      if (vb) vb.onclick = () => {
-        const r = Foreign.callVolunteers(state, f);
+      if (vb) vb.onclick = async () => {
+        const r = await Foreign.callVolunteers(state, f);
         if (!r.ok) toast(r.reason, true); else { toast('Заклик надіслано.'); renderAll(); openEconomy(); }
       };
     });
@@ -2488,7 +2498,10 @@ const UI = (() => {
     // Сторінку віддав сервер онлайн-гри — лобі мультиплеєра (85_net.js).
     if (st) { UI.setState(st); return; }
     if (location.hash === '#quickstart') { UI.setState(Engine.newGame(1999)); return; }
-    Net.detect().then(on => { if (on) Net.boot(); else UI.openMainMenu(); });
+    // ?hgs=… / ?room=… в адресі (тест хоста чи посилання на кімнату) — одразу мережева гра
+    const q = new URLSearchParams(location.search);
+    // гравець був у мережевій кімнаті — повертаємо його туди після перезавантаження
+    if (Net.available() && (q.get('hgs') || q.get('room') || Net.resumable())) Net.open(); else UI.openMainMenu();
   };
   const hot = window.claude && window.claude.hot;
   if (hot && hot.snapshot) hot.snapshot(() => ({ save: UI.getState() ? SaveSystem.serialize(UI.getState()) : null }));

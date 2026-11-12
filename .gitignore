@@ -4,3 +4,4 @@ __pycache__/
 *.cpuprofile
 .DS_Store
 server/saves/
+server/game-data/
